@@ -1,7 +1,7 @@
 from scripts.job_matcher import calculate_match
 
 
-job_title = "Junior Backend Developer"
+job_title = "Senior Backend Developer"
 
 job_description = """
 We are looking for a Junior Backend Developer.
