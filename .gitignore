@@ -1,0 +1,43 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Generated data
+data/*.csv
+data/*.xlsx
+
+# Temporary files
+*.tmp
+*.temp
+
+# Python test/coverage files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets and credentials
+credentials.json
+token.json
+secrets.json
