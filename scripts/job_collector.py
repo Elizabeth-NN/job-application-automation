@@ -16,7 +16,7 @@ HEADERS = {
 
 
 def get_page(url):
-    """Download a public webpage."""
+    """Download a public webpage and return BeautifulSoup."""
 
     response = requests.get(
         url,
@@ -38,142 +38,95 @@ def clean_text(text):
     if not text:
         return ""
 
-    return " ".join(text.split())
+    return " ".join(
+        text.split()
+    ).strip()
 
 
-def get_job_details(job_url):
-    """Extract structured information from a job page."""
+def extract_value_from_lines(lines, label):
+    """
+    Extract a metadata value when the label and value
+    appear on separate lines.
 
-    soup = get_page(job_url)
+    Example:
 
-    # ---------------------------------
-    # Title
-    # ---------------------------------
+        Location
+        Nairobi
 
-    heading = soup.find("h1")
+    Returns:
+        Nairobi
+    """
 
-    title = clean_text(
-        heading.get_text(" ", strip=True)
-        if heading
-        else ""
-    )
+    for index, line in enumerate(lines):
 
-    # ---------------------------------
-    # Main job content
-    # ---------------------------------
+        if line.strip() == label:
 
-    page_text = soup.get_text(
-        "\n",
-        strip=True
-    )
+            if index + 1 < len(lines):
 
-    lines = [
-        clean_text(line)
-        for line in page_text.splitlines()
-        if clean_text(line)
-    ]
+                value = clean_text(
+                    lines[index + 1]
+                )
 
-        # ---------------------------------
-    # Extract metadata
-    # ---------------------------------
+                if value and value not in [
+                    "Job Type",
+                    "Qualification",
+                    "Experience",
+                    "Location",
+                    "Job Field",
+                ]:
+                    return value
 
-    company = ""
-    location = ""
-    experience = ""
-    qualification = ""
-    job_type = ""
-    posted = ""
-    deadline = ""
+    return ""
 
-    # MyJobMag displays the metadata in a block
-    # containing these labels.
-    metadata_labels = [
+
+def extract_metadata(lines):
+    """
+    Extract structured job metadata.
+
+    MyJobMag may display metadata either:
+    - on separate lines
+    - on one line
+    - partially combined
+
+    This function handles both formats.
+    """
+
+    metadata = {
+        "job_type": "",
+        "qualification": "",
+        "experience": "",
+        "location": "",
+    }
+
+    labels = [
         "Job Type",
         "Qualification",
         "Experience",
         "Location",
-        "Job Field",
     ]
 
-    # Find the line containing "Posted:"
-    # and inspect the surrounding metadata.
-    for i, line in enumerate(lines):
+    # --------------------------------------------------
+    # 1. Try separate-line format
+    # --------------------------------------------------
 
-        if line == "Posted:" and i + 1 < len(lines):
-            posted = lines[i + 1]
+    for label in labels:
 
-        elif line == "Deadline:" and i + 1 < len(lines):
-            deadline = lines[i + 1]
+        key = label.lower().replace(
+            " ",
+            "_"
+        )
 
-    # ---------------------------------
-    # Extract the metadata block
-    # ---------------------------------
+        value = extract_value_from_lines(
+            lines,
+            label
+        )
 
-    metadata_index = None
+        if value:
+            metadata[key] = value
 
-    for i, line in enumerate(lines):
-
-        if (
-            "Job Type" in line
-            and "Qualification" in line
-            and "Experience" in line
-        ):
-            metadata_index = i
-            break
-
-    if metadata_index is not None:
-
-        metadata_block = lines[
-            metadata_index:
-            metadata_index + 10
-        ]
-
-        for line in metadata_block:
-
-            # Only process the actual metadata line.
-            if line.startswith("Job Type"):
-                value = line.replace(
-                    "Job Type",
-                    "",
-                    1
-                ).strip()
-
-                if value:
-                    job_type = value
-
-            elif line.startswith("Qualification"):
-                value = line.replace(
-                    "Qualification",
-                    "",
-                    1
-                ).strip()
-
-                if value:
-                    qualification = value
-
-            elif line.startswith("Experience"):
-                value = line.replace(
-                    "Experience",
-                    "",
-                    1
-                ).strip()
-
-                if value:
-                    experience = value
-
-            elif line.startswith("Location"):
-                value = line.replace(
-                    "Location",
-                    "",
-                    1
-                ).strip()
-
-                if value:
-                    location = value
-
-        # ---------------------------------
-    # Handle metadata on a single line
-    # ---------------------------------
+    # --------------------------------------------------
+    # 2. Look for a combined metadata line
+    # --------------------------------------------------
 
     metadata_text = ""
 
@@ -188,110 +141,251 @@ def get_job_details(job_url):
             metadata_text = line
             break
 
+    # --------------------------------------------------
+    # 3. Parse combined metadata safely
+    # --------------------------------------------------
+
     if metadata_text:
 
-        markers = [
-            "Job Type",
-            "Qualification",
-            "Experience",
-            "Location",
-            "Job Field",
-        ]
+        marker_positions = []
 
-        values = {}
+        for label in labels:
 
-        for index, marker in enumerate(markers):
-
-            if marker not in metadata_text:
-                continue
-
-            start = (
-                metadata_text.find(marker)
-                + len(marker)
+            position = metadata_text.find(
+                label
             )
 
-            if index + 1 < len(markers):
+            if position != -1:
 
-                next_marker = markers[index + 1]
-
-                end = metadata_text.find(
-                    next_marker,
-                    start
+                marker_positions.append(
+                    (position, label)
                 )
 
-                if end == -1:
-                    value = metadata_text[start:]
-                else:
-                    value = metadata_text[start:end]
+        marker_positions.sort(
+            key=lambda item: item[0]
+        )
+
+        for index, (start, label) in enumerate(
+            marker_positions
+        ):
+
+            if index + 1 < len(marker_positions):
+
+                end = marker_positions[
+                    index + 1
+                ][0]
 
             else:
-                value = metadata_text[start:]
 
-            values[marker] = value.strip()
+                end = len(
+                    metadata_text
+                )
 
-        job_type = values.get(
-            "Job Type",
-            job_type
-        )
+            value = metadata_text[
+                start + len(label):end
+            ]
 
-        qualification = values.get(
-            "Qualification",
-            qualification
-        )
+            value = clean_text(value)
 
-        experience = values.get(
-            "Experience",
-            experience
-        )
+            key = label.lower().replace(
+                " ",
+                "_"
+            )
 
-        location = values.get(
-            "Location",
-            location
-        )
-    # ---------------------------------
-    # Extract company
-    # ---------------------------------
+            if value:
+                metadata[key] = value
+
+    return metadata
+
+
+def extract_posted_and_deadline(lines):
+    """Extract posting date and application deadline."""
+
+    posted = ""
+    deadline = ""
+
+    for index, line in enumerate(lines):
+
+        if line == "Posted:":
+
+            if index + 1 < len(lines):
+
+                posted = clean_text(
+                    lines[index + 1]
+                )
+
+        elif line == "Deadline:":
+
+            if index + 1 < len(lines):
+
+                deadline = clean_text(
+                    lines[index + 1]
+                )
+
+    return posted, deadline
+
+
+def extract_company(lines):
+    """Extract company name from the job page."""
 
     for line in lines:
 
-        if line.startswith("View Jobs at "):
+        if line.startswith(
+            "View Jobs at "
+        ):
 
-            company = line.replace(
-                "View Jobs at ",
-                "",
-                1
-            ).strip()
+            return clean_text(
+                line.replace(
+                    "View Jobs at ",
+                    "",
+                    1
+                )
+            )
 
-            break
+    return ""
 
-    # ---------------------------------
-    # Find the actual job content
-    # ---------------------------------
+
+def extract_description(lines):
+    """
+    Extract the actual job description.
+
+    Starts at common MyJobMag job-content headings.
+    """
 
     description_start = None
 
-    for i, line in enumerate(lines):
+    start_headings = [
+        "Duties and Responsibilities",
+        "Qualifications and Experience",
+        "Job Description",
+        "Responsibilities",
+        "Requirements",
+        "Key Responsibilities",
+    ]
 
-        if (
-            line == "Duties and Responsibilities"
-            or line == "Qualifications and Experience"
-            or line == "Job Description"
-        ):
-            description_start = i
+    for index, line in enumerate(lines):
+
+        if line in start_headings:
+
+            description_start = index
+
             break
 
-    if description_start is not None:
+    if description_start is None:
 
-        description_lines = lines[
-            description_start:
-        ]
+        return ""
 
-        description = "\n".join(
-            description_lines
+    description_lines = lines[
+        description_start:
+    ]
+
+    return "\n".join(
+        description_lines
+    )
+
+
+def get_job_details(job_url):
+    """Extract structured information from a job page."""
+
+    soup = get_page(
+        job_url
+    )
+
+    # ==================================================
+    # TITLE
+    # ==================================================
+
+    heading = soup.find("h1")
+
+    if heading:
+
+        title = clean_text(
+            heading.get_text(
+                " ",
+                strip=True
+            )
         )
 
     else:
-        description = ""
+
+        title = ""
+
+    # ==================================================
+    # PAGE TEXT
+    # ==================================================
+
+    page_text = soup.get_text(
+        "\n",
+        strip=True
+    )
+
+    lines = []
+
+    for line in page_text.splitlines():
+
+        cleaned = clean_text(
+            line
+        )
+
+        if cleaned:
+
+            lines.append(
+                cleaned
+            )
+
+    # ==================================================
+    # METADATA
+    # ==================================================
+
+    metadata = extract_metadata(
+        lines
+    )
+
+    job_type = metadata[
+        "job_type"
+    ]
+
+    qualification = metadata[
+        "qualification"
+    ]
+
+    experience = metadata[
+        "experience"
+    ]
+
+    location = metadata[
+        "location"
+    ]
+
+    # ==================================================
+    # POSTED + DEADLINE
+    # ==================================================
+
+    posted, deadline = (
+        extract_posted_and_deadline(
+            lines
+        )
+    )
+
+    # ==================================================
+    # COMPANY
+    # ==================================================
+
+    company = extract_company(
+        lines
+    )
+
+    # ==================================================
+    # DESCRIPTION
+    # ==================================================
+
+    description = extract_description(
+        lines
+    )
+
+    # ==================================================
+    # RETURN STRUCTURED DATA
+    # ==================================================
 
     return {
         "title": title,
@@ -308,17 +402,26 @@ def get_job_details(job_url):
 
 
 def collect_jobs(url):
-    """Collect job URLs from a public listing page."""
+    """Collect job listings from a MyJobMag listing page."""
 
-    soup = get_page(url)
+    soup = get_page(
+        url
+    )
 
     jobs = []
 
+    # ==================================================
+    # FIND JOB HEADINGS
+    # ==================================================
+
     for heading in soup.find_all("h2"):
 
-        link = heading.find("a")
+        link = heading.find(
+            "a"
+        )
 
         if not link:
+
             continue
 
         title = clean_text(
@@ -328,9 +431,12 @@ def collect_jobs(url):
             )
         )
 
-        href = link.get("href")
+        href = link.get(
+            "href"
+        )
 
         if not href:
+
             continue
 
         job_url = urljoin(
@@ -343,7 +449,28 @@ def collect_jobs(url):
             "url": job_url
         })
 
-    return jobs
+    # ==================================================
+    # REMOVE DUPLICATES
+    # ==================================================
+
+    unique_jobs = []
+    seen_urls = set()
+
+    for job in jobs:
+
+        if job["url"] in seen_urls:
+
+            continue
+
+        seen_urls.add(
+            job["url"]
+        )
+
+        unique_jobs.append(
+            job
+        )
+
+    return unique_jobs
 
 
 if __name__ == "__main__":
@@ -353,40 +480,93 @@ if __name__ == "__main__":
         "jobs-by-title/developer-python"
     )
 
-    print("Collecting job listings...\n")
+    print(
+        "Collecting job listings...\n"
+    )
 
-    jobs = collect_jobs(listing_url)
+    jobs = collect_jobs(
+        listing_url
+    )
 
-    print(f"Found {len(jobs)} jobs\n")
+    print(
+        f"Found {len(jobs)} jobs\n"
+    )
 
     if jobs:
 
         first_job = jobs[0]
 
-        print("Fetching first job:")
-        print(first_job["title"])
-        print(first_job["url"])
+        print(
+            "Fetching first job:"
+        )
+
+        print(
+            first_job["title"]
+        )
+
+        print(
+            first_job["url"]
+        )
+
         print()
 
         details = get_job_details(
             first_job["url"]
         )
 
-        print("JOB DETAILS")
-        print("===========")
+        print(
+            "JOB DETAILS"
+        )
 
-        print(f"Title: {details['title']}")
-        print(f"Company: {details['company']}")
-        print(f"Location: {details['location']}")
-        print(f"Job Type: {details['job_type']}")
-        print(f"Qualification: {details['qualification']}")
-        print(f"Experience: {details['experience']}")
-        print(f"Posted: {details['posted']}")
-        print(f"Deadline: {details['deadline']}")
-        print(f"URL: {details['url']}")
+        print(
+            "==========="
+        )
 
-        print("\nDESCRIPTION")
-        print("===========")
+        print(
+            f"Title: {details['title']}"
+        )
+
+        print(
+            f"Company: {details['company']}"
+        )
+
+        print(
+            f"Location: {details['location']}"
+        )
+
+        print(
+            f"Job Type: {details['job_type']}"
+        )
+
+        print(
+            f"Qualification: "
+            f"{details['qualification']}"
+        )
+
+        print(
+            f"Experience: "
+            f"{details['experience']}"
+        )
+
+        print(
+            f"Posted: {details['posted']}"
+        )
+
+        print(
+            f"Deadline: {details['deadline']}"
+        )
+
+        print(
+            f"URL: {details['url']}"
+        )
+
+        print(
+            "\nDESCRIPTION"
+        )
+
+        print(
+            "==========="
+        )
 
         print(
             details["description"][:5000]

@@ -1,5 +1,7 @@
 from scripts.job_collector import collect_jobs, get_job_details
 from scripts.job_matcher import calculate_match
+from scripts.job_tracker import save_job
+
 
 LISTING_URL = (
     "https://www.myjobmag.co.ke/"
@@ -8,7 +10,7 @@ LISTING_URL = (
 
 
 def run_job_search():
-    """Collect, match, and display jobs."""
+    """Collect, match, save, and display jobs."""
 
     print("=" * 60)
     print("AUTOMATED JOB SEARCH")
@@ -27,7 +29,7 @@ def run_job_search():
 
     results = []
 
-    # --------------------------------
+        # --------------------------------
     # 2. Process each job
     # --------------------------------
 
@@ -56,10 +58,21 @@ def run_job_search():
 
             results.append(result)
 
+            # Save job to Excel tracker
+            saved = save_job(
+                details,
+                match
+            )
+
+            if saved:
+                print("   ✓ Saved to Excel tracker")
+            else:
+                print("   → Already in tracker")
+
         except Exception as error:
 
             print(
-                f"  ERROR: {error}"
+                f"   ERROR: {error}"
             )
 
     # --------------------------------
@@ -99,11 +112,14 @@ def run_job_search():
         print(
             f"   Category: {job['category']}"
         )
+
         print(
-        f"   Recommendation: {job['recommendation']}"
+            f"   Recommendation: "
+            f"{job['recommendation']}"
         )
 
         if job["role_matches"]:
+
             print(
                 "   Role match: "
                 + ", ".join(
