@@ -1,7 +1,6 @@
 from scripts.job_collector import collect_jobs, get_job_details
 from scripts.job_matcher import calculate_match
 
-
 LISTING_URL = (
     "https://www.myjobmag.co.ke/"
     "jobs-by-title/developer-python"
@@ -100,6 +99,17 @@ def run_job_search():
         print(
             f"   Category: {job['category']}"
         )
+        print(
+        f"   Recommendation: {job['recommendation']}"
+        )
+
+        if job["role_matches"]:
+            print(
+                "   Role match: "
+                + ", ".join(
+                    job["role_matches"]
+                )
+            )
 
         if job["matching_skills"]:
 
