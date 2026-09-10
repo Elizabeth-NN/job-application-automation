@@ -20,10 +20,13 @@ JOB_PROFILE = {
         "REST API",
         "React",
         "JavaScript",
+        "TypeScript"
         "Next.js",
         "HTML",
         "CSS",
         "Tailwind CSS",
+        "sql"
+        "Mysql"
         "SQLite",
         "SQLAlchemy",
         "Git",
