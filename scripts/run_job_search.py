@@ -1,12 +1,6 @@
-from scripts.job_collector import collect_jobs, get_job_details
+from scripts.job_collector import collect_all_jobs
 from scripts.job_matcher import calculate_match
 from scripts.job_tracker import save_job
-
-
-LISTING_URL = (
-    "https://www.myjobmag.co.ke/"
-    "jobs-by-title/developer-python"
-)
 
 
 def run_job_search():
@@ -17,57 +11,75 @@ def run_job_search():
     print("=" * 60)
     print()
 
-    # --------------------------------
-    # 1. Collect job listings
-    # --------------------------------
+    # ========================================================
+    # 1. COLLECT JOBS FROM ALL SOURCES
+    # ========================================================
 
     print("Collecting jobs...\n")
 
-    jobs = collect_jobs(LISTING_URL)
+    jobs = collect_all_jobs()
 
+    print()
     print(f"Found {len(jobs)} jobs\n")
 
     results = []
 
-        # --------------------------------
-    # 2. Process each job
-    # --------------------------------
+    # ========================================================
+    # 2. PROCESS EACH JOB
+    # ========================================================
 
-    for index, job in enumerate(jobs, start=1):
+    for index, job in enumerate(
+        jobs,
+        start=1
+    ):
 
         print(
             f"[{index}/{len(jobs)}] "
-            f"Processing: {job['title']}"
+            f"Processing: "
+            f"{job['title']}"
         )
 
         try:
 
-            details = get_job_details(
-                job["url"]
-            )
+            # ------------------------------------------------
+            # Job details are already extracted by the
+            # source collector.
+            # ------------------------------------------------
 
             match = calculate_match(
-                details["title"],
-                details["description"]
+                job["title"],
+                job["description"]
             )
 
             result = {
-                **details,
+                **job,
                 **match
             }
 
-            results.append(result)
+            results.append(
+                result
+            )
 
+            # ------------------------------------------------
             # Save job to Excel tracker
+            # ------------------------------------------------
+
             saved = save_job(
-                details,
+                job,
                 match
             )
 
             if saved:
-                print("   ✓ Saved to Excel tracker")
+
+                print(
+                    "   ✓ Saved to Excel tracker"
+                )
+
             else:
-                print("   → Already in tracker")
+
+                print(
+                    "   → Already in tracker"
+                )
 
         except Exception as error:
 
@@ -75,18 +87,18 @@ def run_job_search():
                 f"   ERROR: {error}"
             )
 
-    # --------------------------------
-    # 3. Sort by match score
-    # --------------------------------
+    # ========================================================
+    # 3. SORT BY MATCH SCORE
+    # ========================================================
 
     results.sort(
         key=lambda job: job["score"],
         reverse=True
     )
 
-    # --------------------------------
-    # 4. Display results
-    # --------------------------------
+    # ========================================================
+    # 4. DISPLAY RESULTS
+    # ========================================================
 
     print()
     print("=" * 60)
@@ -102,21 +114,34 @@ def run_job_search():
         print(
             f"{index}. "
             f"{job['score']}% — "
-            f"{job['title']}"
+            f"{job['title']} "
+            f"at "
+            f"{job['company']}"
         )
 
         print(
-            f"   Company: {job['company']}"
+            f"   Source: "
+            f"{job.get('source', 'Unknown')}"
         )
 
         print(
-            f"   Category: {job['category']}"
+            f"   Location: "
+            f"{job.get('location', '')}"
+        )
+
+        print(
+            f"   Category: "
+            f"{job['category']}"
         )
 
         print(
             f"   Recommendation: "
             f"{job['recommendation']}"
         )
+
+        # ------------------------------------------------
+        # Role matches
+        # ------------------------------------------------
 
         if job["role_matches"]:
 
@@ -127,6 +152,10 @@ def run_job_search():
                 )
             )
 
+        # ------------------------------------------------
+        # Matching skills
+        # ------------------------------------------------
+
         if job["matching_skills"]:
 
             print(
@@ -136,6 +165,23 @@ def run_job_search():
                 )
             )
 
+        # ------------------------------------------------
+        # Missing skills
+        # ------------------------------------------------
+
+        if job["missing_skills"]:
+
+            print(
+                "   Missing skills: "
+                + ", ".join(
+                    job["missing_skills"]
+                )
+            )
+
+        # ------------------------------------------------
+        # Warnings
+        # ------------------------------------------------
+
         if job["warnings"]:
 
             for warning in job["warnings"]:
@@ -143,6 +189,10 @@ def run_job_search():
                 print(
                     f"   ⚠ {warning}"
                 )
+
+        # ------------------------------------------------
+        # URL
+        # ------------------------------------------------
 
         print(
             f"   URL: {job['url']}"
@@ -152,4 +202,5 @@ def run_job_search():
 
 
 if __name__ == "__main__":
+
     run_job_search()
