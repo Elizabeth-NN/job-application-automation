@@ -68,14 +68,12 @@ def extract_job_article(soup):
 
 def extract_metadata(article):
     """
-    Extract structured metadata from the job article.
+    Extract structured metadata from a BrighterMonday
+    job article.
 
-    Example:
-
-        Min Qualification: Diploma
-        Experience Level: Mid level
-        Experience Length: 3 years
-        Applicant Location: Nairobi, Kenya
+    BrighterMonday may render metadata on one line
+    or across multiple HTML elements, so we search
+    the complete article text.
     """
 
     metadata = {
@@ -90,121 +88,127 @@ def extract_metadata(article):
     if not article:
         return metadata
 
-    text = article.get_text(
-        "\n",
-        strip=True
+    # Get the complete article text.
+    text = clean_text(
+        article.get_text(
+            " ",
+            strip=True
+        )
     )
 
-    lines = [
-        clean_text(line)
-        for line in text.splitlines()
-        if clean_text(line)
-    ]
+    # --------------------------------------------------
+    # Qualification
+    # --------------------------------------------------
 
-    for index, line in enumerate(lines):
+    match = re.search(
+        r"Min Qualification:\s*(.*?)(?=\s+Experience Level:)",
+        text,
+        re.IGNORECASE
+    )
 
-        lower = line.lower()
+    if match:
 
-        # ---------------------------------------------
-        # Minimum qualification
-        # ---------------------------------------------
+        metadata["qualification"] = clean_text(
+            match.group(1)
+        )
 
-        if lower.startswith(
-            "min qualification:"
+    # --------------------------------------------------
+    # Experience level
+    # --------------------------------------------------
+
+    match = re.search(
+        r"Experience Level:\s*(.*?)(?=\s+Experience Length:)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        metadata["experience"] = clean_text(
+            match.group(1)
+        )
+
+    # --------------------------------------------------
+    # Experience length
+    # --------------------------------------------------
+
+    match = re.search(
+        r"Experience Length:\s*(.*?)(?=\s+Language Requirement:)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        metadata["experience_length"] = clean_text(
+            match.group(1)
+        )
+
+    # --------------------------------------------------
+    # Job type / working hours
+    # --------------------------------------------------
+
+    match = re.search(
+        r"Working Hours:\s*(.*?)(?=\s+Applicant Location:)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        metadata["job_type"] = clean_text(
+            match.group(1)
+        )
+
+    # --------------------------------------------------
+    # Applicant location
+    # --------------------------------------------------
+
+    match = re.search(
+        r"Applicant Location:\s*(.*?)(?=\s+Job descriptions? & requirements)",
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        metadata["location"] = clean_text(
+            match.group(1)
+        )
+
+    # --------------------------------------------------
+    # Posted date
+    # --------------------------------------------------
+
+    posted_match = re.search(
+        r"\b(\d+\s+(?:day|days|hour|hours|minute|minutes)\s+ago)\b",
+        text,
+        re.IGNORECASE
+    )
+
+    if posted_match:
+
+        metadata["posted"] = clean_text(
+            posted_match.group(1)
+        )
+
+    else:
+
+        if re.search(
+            r"\btoday\b",
+            text,
+            re.IGNORECASE
         ):
 
-            value = line.split(
-                ":",
-                1
-            )[1]
+            metadata["posted"] = "Today"
 
-            metadata["qualification"] = (
-                clean_text(value)
-            )
-
-        # ---------------------------------------------
-        # Experience level
-        # ---------------------------------------------
-
-        elif lower.startswith(
-            "experience level:"
+        elif re.search(
+            r"\byesterday\b",
+            text,
+            re.IGNORECASE
         ):
 
-            value = line.split(
-                ":",
-                1
-            )[1]
-
-            metadata["experience"] = (
-                clean_text(value)
-            )
-
-        # ---------------------------------------------
-        # Experience length
-        # ---------------------------------------------
-
-        elif lower.startswith(
-            "experience length:"
-        ):
-
-            value = line.split(
-                ":",
-                1
-            )[1]
-
-            metadata["experience_length"] = (
-                clean_text(value)
-            )
-
-        # ---------------------------------------------
-        # Applicant location
-        # ---------------------------------------------
-
-        elif lower.startswith(
-            "applicant location:"
-        ):
-
-            value = line.split(
-                ":",
-                1
-            )[1]
-
-            metadata["location"] = (
-                clean_text(value)
-            )
-
-        # ---------------------------------------------
-        # Working hours / job type
-        # ---------------------------------------------
-
-        elif lower.startswith(
-            "working hours:"
-        ):
-
-            value = line.split(
-                ":",
-                1
-            )[1]
-
-            metadata["job_type"] = (
-                clean_text(value)
-            )
-
-        # ---------------------------------------------
-        # Posted date
-        # ---------------------------------------------
-
-        elif (
-            "days ago" in lower
-            or "day ago" in lower
-            or "hours ago" in lower
-            or lower == "today"
-            or lower == "yesterday"
-        ):
-
-            if not metadata["posted"]:
-
-                metadata["posted"] = line
+            metadata["posted"] = "Yesterday"
 
     return metadata
 
