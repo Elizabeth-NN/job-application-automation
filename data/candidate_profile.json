@@ -1,0 +1,172 @@
+{
+  "personal": {
+    "name": "Elizabeth Njuguna",
+    "phone": "+254715099503",
+    "email": "elizabethnjuguna217@gmail.com",
+    "linkedin": "linkedin.com/in/elizabeth-njuguna-432951371",
+    "github": "github.com/Elizabeth-NN",
+    "location": "Nairobi, Kenya"
+  },
+
+  "professional_summary": "Junior Software Developer with hands-on experience in full-stack web development using Python/Flask, React, and JavaScript. Proven ability to contribute to team projects as Assistant Team Lead, handling backend development, schema design, and database implementation. Seeking an opportunity to grow and apply technical skills in a software engineering role.",
+
+  "technical_skills": {
+    "frontend": [
+      "HTML",
+      "CSS",
+      "Tailwind CSS",
+      "JavaScript",
+      "React.js",
+      "Next.js"
+    ],
+    "backend": [
+      "Python",
+      "Flask",
+      "Flask-RESTful",
+      "REST APIs"
+    ],
+    "databases": [
+      "SQLite",
+      "SQLAlchemy",
+      "Schema Design",
+      "Database Implementation"
+    ],
+    "tools_and_other": [
+      "Git",
+      "GitHub",
+      "Click",
+      "Role-Based Authentication"
+    ]
+  },
+
+  "experience": [
+    {
+      "title": "Software Engineering Intern",
+      "company": "F-Bridge Africa",
+      "start_date": "October 2025",
+      "end_date": "November 2025",
+      "responsibilities": [
+        "Developed REST APIs using Python and Flask for a production project.",
+        "Collaborated with the development team to deliver backend functionality on schedule."
+      ]
+    },
+    {
+      "title": "Data Analyst",
+      "company": "Leomart Distributors Limited",
+      "start_date": "June 2019",
+      "end_date": "December 2019",
+      "responsibilities": [
+        "Automated recurring reporting workflows using spreadsheet formulas and macros, reducing manual effort and improving data accuracy.",
+        "Managed and reconciled large datasets across multiple accounts, developing strong attention to detail and structured problem-solving skills.",
+        "Produced management reports requiring data aggregation and analysis, translating raw financial data into clear, actionable summaries."
+      ]
+    },
+    {
+      "title": "Computer Studies & Mathematics Teacher",
+      "company": "St. Monica Glorious Primary School",
+      "start_date": "January 2018",
+      "end_date": "July 2018",
+      "responsibilities": [
+        "Taught foundational computer concepts including hardware, software, and basic programming logic.",
+        "Designed structured lesson plans and assessments, building skills in breaking down complex problems into understandable steps.",
+        "Mentored students and tracked individual progress, demonstrating communication and analytical skills."
+      ]
+    }
+  ],
+
+  "projects": [
+    {
+      "name": "Moringa Innovation Marketplace",
+      "github": "github.com/I-GIKARU/Innovation-Marketplace",
+      "description": "A web-based platform for Moringa School students to showcase and monetize final capstone projects. External users can discover talent, purchase solutions, and buy branded merchandise.",
+      "role": "Assistant Team Lead",
+      "responsibilities": [
+        "Allocated tasks.",
+        "Designed database schema.",
+        "Implemented the backend using Flask.",
+        "Built the client dashboard using React.js."
+      ],
+      "technologies": [
+        "Python",
+        "Flask",
+        "React.js",
+        "Database Schema Design"
+      ]
+    },
+    {
+      "name": "HealthHub",
+      "github": "github.com/I-GIKARU/HealthHub",
+      "description": "Full-stack application built with Flask and React for managing medical clinics, patients, bookings, and reviews, with role-based authentication for admins, clinics, and patients.",
+      "role": "Assistant Team Lead",
+      "responsibilities": [
+        "Handled task allocation.",
+        "Designed database schema.",
+        "Developed the backend."
+      ],
+      "technologies": [
+        "Python",
+        "Flask",
+        "React",
+        "REST APIs",
+        "Role-Based Authentication",
+        "Database Design"
+      ]
+    },
+    {
+      "name": "Maji-Mazuri CLI App",
+      "github": "github.com/Elizabeth-NN/Maji-Mazuri-CLI-App",
+      "description": "Command-line Flask application for managing cocktails, customers, and orders.",
+      "technologies": [
+        "Flask",
+        "Flask-RESTful",
+        "Click",
+        "SQLite"
+      ]
+    },
+    {
+      "name": "Maji-Mazuri React App",
+      "github": "github.com/Elizabeth-NN/cocktails-project",
+      "description": "React frontend for cocktail bar management, enabling owners to manage cocktail inventory, customers, and orders.",
+      "technologies": [
+        "React",
+        "JavaScript",
+        "JSON Server"
+      ]
+    }
+  ],
+
+  "education": [
+    {
+      "qualification": "Software Engineering Certificate",
+      "institution": "Moringa School",
+      "start_date": "February 2025",
+      "end_date": "August 2025",
+      "focus": [
+        "Frontend Development",
+        "React",
+        "Backend Development",
+        "Python",
+        "Flask",
+        "Databases"
+      ]
+    },
+    {
+      "qualification": "Bachelor of Computer Science",
+      "institution": "Strathmore University"
+    },
+    {
+      "qualification": "Kenya Certificate of Secondary Education (KCSE)",
+      "institution": "Starehe Girls Centre",
+      "grade": "B+",
+      "start_date": "2014",
+      "end_date": "2017"
+    },
+    {
+      "qualification": "Kenya Certificate of Primary Education (KCPE)",
+      "institution": "Kaganjo Primary School",
+      "grade": "A",
+      "start_date": "2005",
+      "end_date": "2013"
+    }
+  ]
+}
