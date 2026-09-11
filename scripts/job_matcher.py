@@ -2,6 +2,21 @@
 Job matching and scoring engine.
 
 Evaluates how well a job matches Elizabeth's profile.
+
+The matcher considers:
+
+    1. Whether the job is actually a software/technology role
+    2. Role relevance
+    3. Technical skill overlap
+    4. Transferable skills
+    5. Missing skills
+    6. Experience requirements
+    7. Location
+    8. Education
+    9. Technology stack compatibility
+
+The goal is to estimate whether a job is realistically worth
+applying for, rather than simply counting matching keywords.
 """
 
 import re
@@ -26,18 +41,20 @@ JOB_PROFILE = {
         "full stack developer",
         "fullstack developer",
         "web developer",
+        "web developer",
+        "frontend developer",
+        "frontend engineer",
     ],
 
     # --------------------------------------------------------
-    # Skills
-    #
-    # These are the skills Elizabeth currently has.
+    # Core skills
     # --------------------------------------------------------
 
-    "skills": [
+    "core_skills": [
         "python",
         "flask",
         "rest api",
+        "api development",
         "database design",
         "sql",
         "git",
@@ -50,6 +67,27 @@ JOB_PROFILE = {
     ],
 
     # --------------------------------------------------------
+    # Transferable / related technologies
+    #
+    # These are technologies that are close enough to
+    # Elizabeth's existing skills that they should not be
+    # treated as complete technology mismatches.
+    # --------------------------------------------------------
+
+    "transferable_skills": [
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "django",
+        "fastapi",
+        "typescript",
+        "node.js",
+        "node",
+        "github",
+        "docker",
+    ],
+
+    # --------------------------------------------------------
     # Locations
     # --------------------------------------------------------
 
@@ -57,6 +95,7 @@ JOB_PROFILE = {
         "nairobi",
         "kenya",
         "remote",
+        "hybrid",
     ],
 
     # --------------------------------------------------------
@@ -67,12 +106,13 @@ JOB_PROFILE = {
         "software engineering",
         "computer science",
         "information technology",
+        "information systems",
     ],
 }
 
 
 # ============================================================
-# SKILLS THE MATCHER KNOWS ABOUT
+# KNOWN SKILLS
 # ============================================================
 
 ALL_SKILLS = [
@@ -126,6 +166,8 @@ ALL_SKILLS = [
     "fineract",
     "dynamics 365",
     "servicenow",
+    ".net",
+    "c#",
 ]
 
 
@@ -145,7 +187,116 @@ OUTSIDE_TECHNOLOGIES = {
     "rpa": "RPA",
     "erp": "ERP",
     "fineract": "Fineract",
+    ".net": ".NET",
+    "c#": "C#",
+    "vue.js": "Vue.js",
 }
+
+
+# ============================================================
+# NON-SOFTWARE JOB INDICATORS
+# ============================================================
+
+NON_SOFTWARE_ROLES = [
+
+    "sales representative",
+    "sales agent",
+    "sales associate",
+    "sales officer",
+    "sales manager",
+    "sales executive",
+    "sales and marketing",
+    "business development officer",
+    "business development executive",
+    "relationship officer",
+    "relationship manager",
+    "field collection officer",
+    "collection officer",
+    "delivery driver",
+    "driver",
+    "teacher",
+    "accountant",
+    "finance assistant",
+    "finance officer",
+    "administrator",
+    "hr administrator",
+    "human resources",
+    "marketer",
+    "marketing officer",
+    "graphic designer",
+    "project assistant",
+    "program officer",
+    "wines and spirits attendant",
+]
+
+
+# ============================================================
+# SOFTWARE ROLE INDICATORS
+# ============================================================
+
+SOFTWARE_ROLE_KEYWORDS = [
+
+    "developer",
+    "development",
+    "software",
+    "software engineer",
+    "engineer",
+    "engineering",
+    "programmer",
+    "programming",
+    "webmaster",
+    "web developer",
+    "backend",
+    "back-end",
+    "frontend",
+    "front-end",
+    "full stack",
+    "fullstack",
+    "devops",
+    "data engineer",
+    "data developer",
+    "application developer",
+    "applications developer",
+    "systems developer",
+    "systems engineer",
+    "technical developer",
+    "technology developer",
+    "it developer",
+    "api developer",
+]
+
+
+# ============================================================
+# EXPERIENCE KEYWORDS
+# ============================================================
+
+SENIOR_TITLE_KEYWORDS = [
+    "senior",
+    "lead",
+    "principal",
+    "head of",
+    "manager",
+    "director",
+]
+
+EXPERIENCED_TITLE_KEYWORDS = [
+    "mid-level",
+    "mid level",
+    "midlevel",
+    "intermediate",
+    "experienced",
+]
+
+JUNIOR_TITLE_KEYWORDS = [
+    "junior",
+    "entry level",
+    "entry-level",
+    "graduate",
+    "trainee",
+    "intern",
+    "internship",
+    "fresh graduate",
+]
 
 
 # ============================================================
@@ -160,7 +311,7 @@ def normalize(text):
     if not text:
         return ""
 
-    text = text.lower()
+    text = str(text).lower()
 
     text = re.sub(
         r"[^a-z0-9+#.\-/ ]",
@@ -188,12 +339,78 @@ def contains_term(text, term):
     if not text or not term:
         return False
 
-    pattern = r"(?<!\w)" + re.escape(term) + r"(?!\w)"
+    pattern = (
+        r"(?<!\w)"
+        + re.escape(term)
+        + r"(?!\w)"
+    )
 
     return re.search(
         pattern,
         text
     ) is not None
+
+
+# ============================================================
+# JOB TYPE
+# ============================================================
+
+def is_software_role(title, description=""):
+    """
+    Determine whether a job is primarily a software /
+    technology position.
+
+    The title receives more importance than generic words
+    appearing in the description.
+    """
+
+    normalized_title = normalize(title)
+
+    # Strong non-software title detection.
+    for keyword in NON_SOFTWARE_ROLES:
+
+        if contains_term(
+            normalized_title,
+            keyword
+        ):
+
+            return False
+
+    # Strong software title detection.
+    for keyword in SOFTWARE_ROLE_KEYWORDS:
+
+        if contains_term(
+            normalized_title,
+            keyword
+        ):
+
+            return True
+
+    # If the title is ambiguous, inspect the description.
+    normalized_description = normalize(
+        description
+    )
+
+    software_indicators = 0
+
+    for keyword in SOFTWARE_ROLE_KEYWORDS:
+
+        if contains_term(
+            normalized_description,
+            keyword
+        ):
+
+            software_indicators += 1
+
+    # Technology stack can also indicate a software role.
+    technology_matches = find_job_skills(
+        normalized_description
+    )
+
+    if len(technology_matches) >= 2:
+        software_indicators += 2
+
+    return software_indicators >= 3
 
 
 # ============================================================
@@ -207,9 +424,14 @@ def find_role_matches(title):
 
     matches = []
 
+    normalized_title = normalize(title)
+
     for role in JOB_PROFILE["target_roles"]:
 
-        if contains_term(title, role):
+        if contains_term(
+            normalized_title,
+            role
+        ):
 
             matches.append(role)
 
@@ -224,16 +446,12 @@ def find_role_matches(title):
 
 def find_matching_skills(full_text):
     """
-    Find Elizabeth's skills that appear in the job description.
-
-    This function answers:
-
-        "Which skills does Elizabeth have that this job mentions?"
+    Find core skills Elizabeth has that appear in the job.
     """
 
     matching_skills = []
 
-    for skill in JOB_PROFILE["skills"]:
+    for skill in JOB_PROFILE["core_skills"]:
 
         if contains_term(
             full_text,
@@ -248,20 +466,38 @@ def find_matching_skills(full_text):
 
 
 # ============================================================
+# TRANSFERABLE SKILLS
+# ============================================================
+
+def find_transferable_skills(full_text):
+    """
+    Find technologies that are related to Elizabeth's
+    existing skills.
+    """
+
+    matches = []
+
+    for skill in JOB_PROFILE["transferable_skills"]:
+
+        if contains_term(
+            full_text,
+            skill
+        ):
+
+            matches.append(skill)
+
+    return list(
+        dict.fromkeys(matches)
+    )
+
+
+# ============================================================
 # JOB SKILL EXTRACTION
 # ============================================================
 
 def find_job_skills(full_text):
     """
     Find known skills/technologies mentioned in the job.
-
-    This is different from find_matching_skills().
-
-    find_matching_skills():
-        Finds skills Elizabeth has.
-
-    find_job_skills():
-        Finds skills mentioned by the employer.
     """
 
     job_skills = []
@@ -275,6 +511,13 @@ def find_job_skills(full_text):
 
             job_skills.append(skill)
 
+    # Remove aliases where appropriate.
+    if "react.js" in job_skills and "react" in job_skills:
+        job_skills.remove("react.js")
+
+    if "node" in job_skills and "node.js" in job_skills:
+        job_skills.remove("node")
+
     return list(
         dict.fromkeys(job_skills)
     )
@@ -286,8 +529,8 @@ def find_job_skills(full_text):
 
 def find_outside_technologies(full_text):
     """
-    Find technologies that are outside Elizabeth's
-    primary stack.
+    Find technologies that are significantly outside
+    Elizabeth's current stack.
     """
 
     outside = []
@@ -301,9 +544,12 @@ def find_outside_technologies(full_text):
             technology
         ):
 
-            outside.append(
-                display_name
-            )
+            # Don't treat a technology as "outside" if it
+            # is explicitly considered transferable.
+            if technology in JOB_PROFILE["transferable_skills"]:
+                continue
+
+            outside.append(display_name)
 
     return list(
         dict.fromkeys(outside)
@@ -311,65 +557,152 @@ def find_outside_technologies(full_text):
 
 
 # ============================================================
+# MISSING SKILLS
+# ============================================================
+
+def find_missing_skills(full_text):
+    """
+    Find employer technologies that are not currently
+    listed as core or transferable skills.
+    """
+
+    job_skills = find_job_skills(
+        full_text
+    )
+
+    known_skills = set(
+        JOB_PROFILE["core_skills"]
+        + JOB_PROFILE["transferable_skills"]
+    )
+
+    missing = []
+
+    for skill in job_skills:
+
+        if skill not in known_skills:
+
+            missing.append(skill)
+
+    return list(
+        dict.fromkeys(missing)
+    )
+
+
+# ============================================================
 # EXPERIENCE LEVEL
 # ============================================================
 
-def detect_experience_level(full_text):
+def detect_experience_level(
+    full_text,
+    job_title=""
+):
     """
-    Detect the approximate experience level required.
+    Detect approximate experience level.
+
+    Title-based detection has priority because words such as
+    "experienced" appearing elsewhere in a job description
+    do not necessarily describe the applicant.
     """
 
-    senior_keywords = [
-        "senior",
-        "lead developer",
-        "lead engineer",
-        "principal",
-        "manager",
-        "head of",
-    ]
+    title = normalize(
+        job_title
+    )
 
-    experienced_keywords = [
-        "mid-level",
-        "mid level",
-        "intermediate",
-        "experienced developer",
-        "experienced engineer",
-    ]
+    # --------------------------------------------------------
+    # Title first
+    # --------------------------------------------------------
 
-    junior_keywords = [
-        "junior",
-        "entry level",
-        "entry-level",
-        "graduate",
-        "trainee",
-        "intern",
-        "internship",
-        "fresh graduate",
-    ]
-
-    for keyword in senior_keywords:
+    for keyword in SENIOR_TITLE_KEYWORDS:
 
         if contains_term(
-            full_text,
+            title,
             keyword
         ):
 
             return "senior"
 
-    for keyword in experienced_keywords:
+    for keyword in JUNIOR_TITLE_KEYWORDS:
 
         if contains_term(
-            full_text,
+            title,
+            keyword
+        ):
+
+            return "junior"
+
+    for keyword in EXPERIENCED_TITLE_KEYWORDS:
+
+        if contains_term(
+            title,
             keyword
         ):
 
             return "experienced"
 
-    for keyword in junior_keywords:
+    # --------------------------------------------------------
+    # Explicit experience requirements
+    # --------------------------------------------------------
+
+    years = find_required_experience(
+        full_text
+    )
+
+    if years is not None:
+
+        if years >= 5:
+            return "senior"
+
+        if years >= 3:
+            return "experienced"
+
+        if years <= 1:
+            return "junior"
+
+        return "experienced"
+
+    # --------------------------------------------------------
+    # Description-level indicators.
+    #
+    # These are deliberately more conservative.
+    # --------------------------------------------------------
+
+    description = normalize(
+        full_text
+    )
+
+    senior_phrases = [
+        "senior level",
+        "lead developer",
+        "lead engineer",
+        "principal developer",
+        "principal engineer",
+        "lead a team",
+        "manage a team",
+    ]
+
+    for phrase in senior_phrases:
 
         if contains_term(
-            full_text,
-            keyword
+            description,
+            phrase
+        ):
+
+            return "senior"
+
+    junior_phrases = [
+        "entry level",
+        "entry-level",
+        "recent graduate",
+        "fresh graduate",
+        "graduate trainee",
+        "suitable for graduates",
+    ]
+
+    for phrase in junior_phrases:
+
+        if contains_term(
+            description,
+            phrase
         ):
 
             return "junior"
@@ -384,20 +717,34 @@ def detect_experience_level(full_text):
 def find_required_experience(full_text):
     """
     Find the number of years of experience required.
+
+    Only patterns that explicitly connect the number to
+    professional/job experience are considered.
     """
 
     patterns = [
-        r"(\d+)\+?\s+years?\s+of\s+experience",
-        r"minimum\s+of\s+(\d+)\s+years?",
-        r"at\s+least\s+(\d+)\s+years?",
-        r"(\d+)\s+years?\s+experience",
+
+        r"(\d+)\+?\s+years?\s+of\s+(?:professional\s+)?experience",
+
+        r"minimum\s+of\s+(\d+)\+?\s+years?\s+of\s+experience",
+
+        r"at\s+least\s+(\d+)\+?\s+years?\s+of\s+experience",
+
+        r"(\d+)\+?\s+years?\s+experience",
+
+        r"(\d+)\+?\s+years?\s+in\s+(?:software|web|backend|frontend|development|engineering)",
+
     ]
+
+    normalized = normalize(
+        full_text
+    )
 
     for pattern in patterns:
 
         match = re.search(
             pattern,
-            full_text
+            normalized
         )
 
         if match:
@@ -418,45 +765,51 @@ def find_required_missing_skills(
     missing_skills
 ):
     """
-    Identify missing skills that appear to be explicitly
-    required by the employer.
+    Identify missing skills that occur near explicit
+    requirement language.
 
-    This is used for warnings, not as the primary
-    skill-score calculation.
+    This is a warning mechanism and is not used as a
+    second scoring penalty.
     """
 
-    required_missing = []
+    normalized = normalize(
+        full_text
+    )
 
-    requirement_keywords = [
-        "required",
-        "requirements",
-        "must have",
-        "must-have",
-        "required skills",
-        "qualifications",
-        "experience with",
-        "proficient in",
-        "proficiency in",
-        "knowledge of",
+    requirement_patterns = [
+        r"required",
+        r"requirements",
+        r"must have",
+        r"must-have",
+        r"required skills",
+        r"qualifications",
+        r"experience with",
+        r"proficient in",
+        r"proficiency in",
+        r"knowledge of",
+        r"strong knowledge",
+        r"strong experience",
+        r"essential",
     ]
 
-    # Check whether the job contains language indicating
-    # that specific skills are required.
     has_requirement_language = any(
-        contains_term(
-            full_text,
-            keyword
+        re.search(
+            pattern,
+            normalized
         )
-        for keyword in requirement_keywords
+        for pattern in requirement_patterns
     )
 
     if not has_requirement_language:
+
         return []
+
+    required_missing = []
 
     for skill in missing_skills:
 
         if contains_term(
-            full_text,
+            normalized,
             skill
         ):
 
@@ -465,23 +818,252 @@ def find_required_missing_skills(
             )
 
     return list(
-        dict.fromkeys(required_missing)
+        dict.fromkeys(
+            required_missing
+        )
     )
+
+
+# ============================================================
+# ROLE SCORE
+# ============================================================
+
+def calculate_role_score(role_matches):
+    """
+    Role relevance: 30 points.
+    """
+
+    if not role_matches:
+        return 0
+
+    return 30
+
+
+# ============================================================
+# SKILL SCORE
+# ============================================================
+
+def calculate_skill_score(
+    matching_skills,
+    transferable_skills,
+    job_skills,
+):
+    """
+    Technical skill score: 35 points.
+
+    Core skills are worth more than transferable skills.
+
+    This avoids punishing Elizabeth heavily for technologies
+    such as PostgreSQL when she already has SQL/database
+    experience.
+    """
+
+    if not job_skills:
+
+        return 17
+
+    core_matches = len(
+        matching_skills
+    )
+
+    transferable_matches = len(
+        transferable_skills
+    )
+
+    total_job_skills = len(
+        job_skills
+    )
+
+    weighted_matches = (
+        core_matches
+        + (transferable_matches * 0.65)
+    )
+
+    ratio = (
+        weighted_matches
+        / total_job_skills
+    )
+
+    score = ratio * 35
+
+    return round(
+        min(
+            score,
+            35
+        )
+    )
+
+
+# ============================================================
+# EXPERIENCE SCORE
+# ============================================================
+
+def calculate_experience_score(
+    experience_level,
+    years_required
+):
+    """
+    Experience: 15 points.
+    """
+
+    if experience_level == "junior":
+
+        return 15
+
+    if experience_level == "unknown":
+
+        return 11
+
+    if experience_level == "experienced":
+
+        if years_required is None:
+            return 8
+
+        if years_required <= 2:
+            return 10
+
+        if years_required == 3:
+            return 7
+
+        return 4
+
+    if experience_level == "senior":
+
+        return 0
+
+    return 11
+
+
+# ============================================================
+# LOCATION SCORE
+# ============================================================
+
+def find_location_matches(full_text):
+    """
+    Find matching preferred locations.
+    """
+
+    matches = []
+
+    for location in JOB_PROFILE["locations"]:
+
+        if contains_term(
+            full_text,
+            location
+        ):
+
+            matches.append(
+                location
+            )
+
+    return list(
+        dict.fromkeys(matches)
+    )
+
+
+def calculate_location_score(
+    location_matches
+):
+    """
+    Location: 10 points.
+    """
+
+    if location_matches:
+        return 10
+
+    # Unknown location is neutral rather than a penalty.
+    return 5
+
+
+# ============================================================
+# EDUCATION SCORE
+# ============================================================
+
+def calculate_education_score(full_text):
+    """
+    Education: 5 points.
+    """
+
+    education_keywords = [
+
+        "computer science",
+
+        "software engineering",
+
+        "information technology",
+
+        "information systems",
+
+        "web development",
+
+        "bachelor's degree",
+
+        "bachelor degree",
+
+        "bachelor",
+
+        "degree",
+    ]
+
+    for keyword in education_keywords:
+
+        if contains_term(
+            full_text,
+            keyword
+        ):
+
+            return 5
+
+    return 0
+
+
+# ============================================================
+# TECHNOLOGY FIT
+# ============================================================
+
+def calculate_technology_score(
+    outside_technologies
+):
+    """
+    Technology fit: 5 points.
+
+    One outside technology is acceptable.
+
+    Several unrelated technologies reduce the score.
+    """
+
+    count = len(
+        outside_technologies
+    )
+
+    if count == 0:
+        return 5
+
+    if count == 1:
+        return 4
+
+    if count == 2:
+        return 2
+
+    return 0
 
 
 # ============================================================
 # MAIN MATCHING FUNCTION
 # ============================================================
 
-def calculate_match(job_title, job_description):
+def calculate_match(
+    job_title,
+    job_description
+):
     """
     Calculate how well a job matches Elizabeth's profile.
 
     Scoring:
 
         Role relevance:       30 points
-        Skills:               30 points
-        Experience:           20 points
+        Technical skills:    35 points
+        Experience:           15 points
         Location:             10 points
         Education:             5 points
         Technology fit:        5 points
@@ -497,9 +1079,61 @@ def calculate_match(job_title, job_description):
         job_description
     )
 
-    full_text = f"{title} {description}"
+    full_text = (
+        f"{title} {description}"
+    )
 
     warnings = []
+
+    # ========================================================
+    # 0. JOB TYPE
+    # ========================================================
+
+    software_role = is_software_role(
+        title,
+        description
+    )
+
+    # --------------------------------------------------------
+    # Non-software jobs are handled separately.
+    # --------------------------------------------------------
+
+    if not software_role:
+
+        warnings.append(
+            "This does not appear to be a "
+            "software/technology role."
+        )
+
+        return {
+            "score": 15,
+            "category": "POOR MATCH",
+            "recommendation": "SKIP",
+
+            "role_score": 0,
+            "skill_score": 0,
+            "experience_score": 5,
+            "location_score": 5,
+            "education_score": 0,
+            "technology_score": 5,
+
+            "role_matches": [],
+            "matching_skills": [],
+            "transferable_skills": [],
+            "missing_skills": [],
+            "job_skills": [],
+            "location_matches": [],
+
+            "experience_level": "unknown",
+            "years_required": None,
+
+            "outside_technologies": [],
+            "required_missing_skills": [],
+
+            "software_role": False,
+
+            "warnings": warnings,
+        }
 
     # ========================================================
     # 1. ROLE — 30 POINTS
@@ -509,174 +1143,93 @@ def calculate_match(job_title, job_description):
         title
     )
 
-    if role_matches:
-
-        role_score = 30
-
-    else:
-
-        role_score = 0
+    role_score = calculate_role_score(
+        role_matches
+    )
 
     # ========================================================
-    # 2. SKILLS — 30 POINTS
+    # 2. SKILLS — 35 POINTS
     # ========================================================
 
-    # Skills Elizabeth has that are mentioned in the job.
     matching_skills = find_matching_skills(
         full_text
     )
 
-    # Skills mentioned by the employer.
+    transferable_skills = (
+        find_transferable_skills(
+            full_text
+        )
+    )
+
     job_skills = find_job_skills(
         full_text
     )
 
-    # Skills mentioned by the employer that Elizabeth
-    # does not currently have.
-    missing_skills = [
-        skill
-        for skill in job_skills
-        if skill not in JOB_PROFILE["skills"]
-    ]
+    missing_skills = find_missing_skills(
+        full_text
+    )
 
-    # --------------------------------------------------------
-    # Calculate the score based on JOB skills.
-    #
-    # We do NOT divide by the total number of skills
-    # Elizabeth has.
-    # --------------------------------------------------------
-
-    if job_skills:
-
-        skill_score = (
-            len(matching_skills)
-            / len(job_skills)
-        ) * 30
-
-    else:
-
-        # If no identifiable skills were found, don't give
-        # a completely unknown job zero points.
-        skill_score = 15
-
-    # Never allow the skill score above the maximum.
-    skill_score = min(
-        skill_score,
-        30
+    skill_score = calculate_skill_score(
+        matching_skills,
+        transferable_skills,
+        job_skills
     )
 
     # ========================================================
-    # 3. EXPERIENCE — 20 POINTS
+    # 3. EXPERIENCE — 15 POINTS
     # ========================================================
 
     experience_level = detect_experience_level(
-        full_text
+        full_text,
+        title
     )
 
     years_required = find_required_experience(
         full_text
     )
 
-    if experience_level == "junior":
+    experience_score = calculate_experience_score(
+        experience_level,
+        years_required
+    )
 
-        experience_score = 20
+    if experience_level == "senior":
 
-    elif experience_level == "unknown":
+        warnings.append(
+            "This appears to be a senior/lead "
+            "position."
+        )
 
-        experience_score = 14
-
-    elif experience_level == "experienced":
-
-        if years_required == 3:
-
-            experience_score = 7
-
-        elif (
-            years_required
-            and years_required >= 4
-        ):
-
-            experience_score = 3
-
-        else:
-
-            experience_score = 7
+    elif (
+        experience_level == "experienced"
+        and years_required
+        and years_required >= 3
+    ):
 
         warnings.append(
             f"Requires approximately "
             f"{years_required} years of experience."
         )
 
-    elif experience_level == "senior":
-
-        experience_score = 0
-
-        warnings.append(
-            "This appears to be a senior/experienced "
-            "position."
-        )
-
-    else:
-
-        experience_score = 14
-
     # ========================================================
     # 4. LOCATION — 10 POINTS
     # ========================================================
 
-    location_matches = []
+    location_matches = find_location_matches(
+        full_text
+    )
 
-    for location in JOB_PROFILE["locations"]:
-
-        if contains_term(
-            full_text,
-            location
-        ):
-
-            location_matches.append(
-                location
-            )
-
-    if location_matches:
-
-        location_score = 10
-
-    else:
-
-        # Location not specified.
-        location_score = 5
+    location_score = calculate_location_score(
+        location_matches
+    )
 
     # ========================================================
     # 5. EDUCATION — 5 POINTS
     # ========================================================
 
-    education_keywords = [
-        "computer science",
-        "software engineering",
-        "information technology",
-        "information systems",
-        "web development",
-        "bachelor's degree",
-        "bachelor degree",
-        "bachelor",
-        "degree",
-    ]
-
-    education_match = any(
-        contains_term(
-            full_text,
-            keyword
-        )
-        for keyword in education_keywords
+    education_score = calculate_education_score(
+        full_text
     )
-
-    if education_match:
-
-        education_score = 5
-
-    else:
-
-        education_score = 0
 
     # ========================================================
     # 6. TECHNOLOGY FIT — 5 POINTS
@@ -688,27 +1241,11 @@ def calculate_match(job_title, job_description):
         )
     )
 
-    outside_count = len(
+    technology_score = calculate_technology_score(
         outside_technologies
     )
 
-    if outside_count == 0:
-
-        technology_score = 5
-
-    elif outside_count == 1:
-
-        technology_score = 3
-
-    elif outside_count == 2:
-
-        technology_score = 1
-
-    else:
-
-        technology_score = 0
-
-    if outside_count >= 1:
+    if outside_technologies:
 
         warnings.append(
             "Role focuses on technology outside "
@@ -729,22 +1266,6 @@ def calculate_match(job_title, job_description):
         )
     )
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # We no longer subtract points here.
-    #
-    # Missing job skills are already reflected in the
-    # skill score because skill_score compares:
-    #
-    #     matching job skills
-    #     -------------------
-    #          all job skills
-    #
-    # Required missing skills are therefore warnings rather
-    # than a second penalty.
-    # --------------------------------------------------------
-
     if required_missing_skills:
 
         warnings.append(
@@ -755,23 +1276,18 @@ def calculate_match(job_title, job_description):
         )
 
     # ========================================================
-    # 8. EXTRA PENALTY FOR STRONGLY MISALIGNED ROLES
+    # 8. ROLE / TECHNOLOGY ALIGNMENT
     # ========================================================
 
-    if not role_matches and outside_count >= 1:
+    # A software role without a target role can still be
+    # relevant, but should not receive the same confidence
+    # as a directly matching role.
 
-        misalignment_penalty = min(
-            outside_count * 5,
-            15
-        )
+    if not role_matches:
 
-        technology_score -= (
-            misalignment_penalty
-        )
-
-        technology_score = max(
-            0,
-            technology_score
+        warnings.append(
+            "The job is technical, but the title does "
+            "not directly match your target roles."
         )
 
     # ========================================================
@@ -787,6 +1303,18 @@ def calculate_match(job_title, job_description):
         + technology_score
     )
 
+    # --------------------------------------------------------
+    # Additional guard against severe technology mismatch.
+    # --------------------------------------------------------
+
+    if len(outside_technologies) >= 4:
+
+        score -= 10
+
+    elif len(outside_technologies) == 3:
+
+        score -= 5
+
     score = max(
         0,
         min(
@@ -796,85 +1324,140 @@ def calculate_match(job_title, job_description):
     )
 
     # ========================================================
-    # 10. CATEGORY + RECOMMENDATION
+    # 10. CATEGORY
     # ========================================================
 
     if score >= 70:
 
         category = "STRONG MATCH"
-        recommendation = "APPLY"
 
     elif score >= 55:
 
-        category = "POSSIBLE MATCH"
-        recommendation = "REVIEW"
+        category = "GOOD MATCH"
 
     elif score >= 40:
 
+        category = "POSSIBLE MATCH"
+
+    elif score >= 25:
+
         category = "WEAK MATCH"
-        recommendation = "REVIEW"
 
     else:
 
         category = "POOR MATCH"
+
+    # ========================================================
+    # 11. RECOMMENDATION
+    # ========================================================
+
+    if score >= 70:
+
+        recommendation = "APPLY"
+
+    elif score >= 55:
+
+        recommendation = "REVIEW"
+
+    else:
+
         recommendation = "SKIP"
 
-    # ========================================================
-    # 11. SAFETY RULES FOR APPLICATION RECOMMENDATION
-    # ========================================================
+    # --------------------------------------------------------
+    # Safety rule: senior roles.
+    # --------------------------------------------------------
 
-    # Never automatically recommend APPLY for a senior job.
     if experience_level == "senior":
 
         recommendation = "SKIP"
 
         if category == "STRONG MATCH":
 
-            category = "POSSIBLE MATCH"
+            category = "GOOD MATCH"
 
-    # Never recommend APPLY when there is a major
-    # technology mismatch.
-    if outside_count >= 3:
+    # --------------------------------------------------------
+    # Safety rule: severe technology mismatch.
+    # --------------------------------------------------------
+
+    if len(outside_technologies) >= 4:
 
         recommendation = "SKIP"
 
-        if score >= 55:
+    # --------------------------------------------------------
+    # Safety rule: no role match + weak skills.
+    # --------------------------------------------------------
 
-            category = "POSSIBLE MATCH"
+    if (
+        not role_matches
+        and skill_score < 18
+    ):
+
+        recommendation = "SKIP"
 
     # ========================================================
     # RETURN RESULTS
     # ========================================================
 
     return {
+
+        # ----------------------------------------------------
+        # Final result
+        # ----------------------------------------------------
+
         "score": score,
+
         "category": category,
+
         "recommendation": recommendation,
 
+        # ----------------------------------------------------
         # Score breakdown
+        # ----------------------------------------------------
+
         "role_score": role_score,
-        "skill_score": round(
-            skill_score
-        ),
+
+        "skill_score": skill_score,
+
         "experience_score": experience_score,
+
         "location_score": location_score,
+
         "education_score": education_score,
+
         "technology_score": technology_score,
 
+        # ----------------------------------------------------
         # Matching details
+        # ----------------------------------------------------
+
         "role_matches": role_matches,
+
         "matching_skills": matching_skills,
+
+        "transferable_skills": transferable_skills,
+
         "missing_skills": missing_skills,
+
         "job_skills": job_skills,
+
         "location_matches": location_matches,
+
         "experience_level": experience_level,
+
         "years_required": years_required,
+
         "outside_technologies": outside_technologies,
+
         "required_missing_skills": (
             required_missing_skills
         ),
 
+        "software_role": software_role,
+
+        # ----------------------------------------------------
         # Warnings
+        # ----------------------------------------------------
+
         "warnings": list(
             dict.fromkeys(
                 warnings
@@ -897,6 +1480,7 @@ if __name__ == "__main__":
 
         {
             "title": "Junior Python Developer",
+
             "description": """
                 We are looking for a junior Python developer
                 with experience in Python, Flask, REST API
@@ -908,7 +1492,8 @@ if __name__ == "__main__":
         },
 
         {
-            "title": "Senior Dynamics 365 Developer",
+            "title": "Senior Dynamics 365 Business Central Developer",
+
             "description": """
                 We are looking for a senior Dynamics 365
                 developer with 5 years of experience.
@@ -920,12 +1505,36 @@ if __name__ == "__main__":
 
         {
             "title": "Backend Developer",
+
             "description": """
                 We are looking for a backend developer
                 with Python, Flask, REST API, database design
                 and Git experience.
 
                 Knowledge of SQL is an advantage.
+            """
+        },
+
+        {
+            "title": "Backend Developer - Go & PostgreSQL",
+
+            "description": """
+                We are looking for a backend developer
+                with experience in Go and PostgreSQL.
+
+                Experience with REST APIs, databases and
+                software development is required.
+            """
+        },
+
+        {
+            "title": "Sales Representative",
+
+            "description": """
+                We are looking for a sales representative
+                to promote products and acquire customers.
+
+                Previous sales experience is preferred.
             """
         },
     ]
@@ -938,6 +1547,7 @@ if __name__ == "__main__":
         )
 
         print()
+
         print(
             f"Job: {job['title']}"
         )
@@ -949,20 +1559,26 @@ if __name__ == "__main__":
         print(
             f"Breakdown: "
             f"Role {result['role_score']}/30 | "
-            f"Skills {result['skill_score']}/30 | "
-            f"Experience {result['experience_score']}/20 | "
+            f"Skills {result['skill_score']}/35 | "
+            f"Experience {result['experience_score']}/15 | "
             f"Location {result['location_score']}/10 | "
             f"Education {result['education_score']}/5 | "
             f"Technology {result['technology_score']}/5"
         )
 
         print(
-            f"Category: {result['category']}"
+            f"Category: "
+            f"{result['category']}"
         )
 
         print(
             f"Recommendation: "
             f"{result['recommendation']}"
+        )
+
+        print(
+            "Software role:",
+            result["software_role"]
         )
 
         print(
@@ -984,6 +1600,15 @@ if __name__ == "__main__":
         )
 
         print(
+            "Transferable skills:",
+            ", ".join(
+                result["transferable_skills"]
+            )
+            if result["transferable_skills"]
+            else "None"
+        )
+
+        print(
             "Missing skills:",
             ", ".join(
                 result["missing_skills"]
@@ -993,16 +1618,33 @@ if __name__ == "__main__":
         )
 
         print(
-            "Roles:",
-            ", ".join(
-                result["role_matches"]
-            )
-            if result["role_matches"]
-            else "None"
+            "Experience:",
+            result["experience_level"]
         )
 
-        for warning in result["warnings"]:
+        print(
+            "Years required:",
+            result["years_required"]
+            if result["years_required"] is not None
+            else "Not specified"
+        )
+
+        print(
+            "Warnings:"
+        )
+
+        if result["warnings"]:
+
+            for warning in result["warnings"]:
+
+                print(
+                    f"  ⚠ {warning}"
+                )
+
+        else:
 
             print(
-                f"WARNING: {warning}"
+                "  None"
             )
+
+        print("-" * 60)
