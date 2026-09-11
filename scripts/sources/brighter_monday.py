@@ -1,9 +1,14 @@
+import re
+
 import requests
+
 from bs4 import BeautifulSoup
+
 from urllib.parse import urljoin
 
 
 BASE_URL = "https://www.brightermonday.co.ke"
+
 
 HEADERS = {
     "User-Agent": (
@@ -43,131 +48,49 @@ def clean_text(text):
     ).strip()
 
 
-def collect_jobs(listing_url):
+def extract_job_article(soup):
     """
-    Collect job links from a BrighterMonday
-    listing page.
+    Return the main BrighterMonday job article.
+
+    BrighterMonday places the actual job information
+    inside:
+
+        <article class="job__details">
     """
 
-    soup = get_page(
-        listing_url
+    article = soup.find(
+        "article",
+        class_="job__details"
     )
 
-    jobs = []
-    seen_urls = set()
-
-    # BrighterMonday job listings use links
-    # containing /listings/
-    for link in soup.find_all(
-        "a",
-        href=True
-    ):
-
-        href = link.get("href", "")
-
-        if "/listings/" not in href:
-            continue
-
-        job_url = urljoin(
-            BASE_URL,
-            href
-        )
-
-        if job_url in seen_urls:
-            continue
-
-        title = clean_text(
-            link.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-        if not title:
-            continue
-
-        seen_urls.add(
-            job_url
-        )
-
-        jobs.append({
-            "title": title,
-            "url": job_url
-        })
-
-    return jobs
+    return article
 
 
-def extract_description(soup):
+def extract_metadata(article):
     """
-    Extract the job description and requirements.
+    Extract structured metadata from the job article.
+
+    Example:
+
+        Min Qualification: Diploma
+        Experience Level: Mid level
+        Experience Length: 3 years
+        Applicant Location: Nairobi, Kenya
     """
 
-    description_parts = []
+    metadata = {
+        "qualification": "",
+        "experience": "",
+        "experience_length": "",
+        "location": "",
+        "job_type": "",
+        "posted": "",
+    }
 
-    # Look for common job-detail headings.
-    headings = soup.find_all(
-        ["h2", "h3"]
-    )
+    if not article:
+        return metadata
 
-    for heading in headings:
-
-        heading_text = clean_text(
-            heading.get_text(
-                " ",
-                strip=True
-            )
-        ).lower()
-
-        if (
-            "job summary" in heading_text
-            or "job descriptions" in heading_text
-            or "requirements" in heading_text
-            or "job description" in heading_text
-        ):
-
-            # Collect following content.
-            for element in heading.find_all_next():
-
-                text = clean_text(
-                    element.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if text:
-                    description_parts.append(
-                        text
-                    )
-
-    # Remove duplicates while preserving order.
-    unique_parts = []
-    seen = set()
-
-    for part in description_parts:
-
-        if part in seen:
-            continue
-
-        seen.add(part)
-
-        unique_parts.append(
-            part
-        )
-
-    return "\n".join(
-        unique_parts
-    )
-
-
-def extract_metadata(soup):
-    """
-    Extract basic metadata from a BrighterMonday
-    job page.
-    """
-
-    text = soup.get_text(
+    text = article.get_text(
         "\n",
         strip=True
     )
@@ -178,115 +101,289 @@ def extract_metadata(soup):
         if clean_text(line)
     ]
 
-    metadata = {
-        "location": "",
-        "job_type": "",
-        "experience": "",
-        "qualification": "",
-        "posted": "",
-        "deadline": "",
-    }
-
-    # --------------------------------------------------
-    # Look for known metadata values.
-    # --------------------------------------------------
-
     for index, line in enumerate(lines):
 
-        lower_line = line.lower()
+        lower = line.lower()
 
-        if (
-            "full time" in lower_line
-            or "part time" in lower_line
-            or "contract" in lower_line
-            or "internship" in lower_line
+        # ---------------------------------------------
+        # Minimum qualification
+        # ---------------------------------------------
+
+        if lower.startswith(
+            "min qualification:"
         ):
 
-            if not metadata["job_type"]:
-                metadata["job_type"] = line
+            value = line.split(
+                ":",
+                1
+            )[1]
 
-        if (
-            line in [
-                "Today",
-                "Yesterday",
-            ]
-            or "days ago" in lower_line
-            or "hours ago" in lower_line
+            metadata["qualification"] = (
+                clean_text(value)
+            )
+
+        # ---------------------------------------------
+        # Experience level
+        # ---------------------------------------------
+
+        elif lower.startswith(
+            "experience level:"
+        ):
+
+            value = line.split(
+                ":",
+                1
+            )[1]
+
+            metadata["experience"] = (
+                clean_text(value)
+            )
+
+        # ---------------------------------------------
+        # Experience length
+        # ---------------------------------------------
+
+        elif lower.startswith(
+            "experience length:"
+        ):
+
+            value = line.split(
+                ":",
+                1
+            )[1]
+
+            metadata["experience_length"] = (
+                clean_text(value)
+            )
+
+        # ---------------------------------------------
+        # Applicant location
+        # ---------------------------------------------
+
+        elif lower.startswith(
+            "applicant location:"
+        ):
+
+            value = line.split(
+                ":",
+                1
+            )[1]
+
+            metadata["location"] = (
+                clean_text(value)
+            )
+
+        # ---------------------------------------------
+        # Working hours / job type
+        # ---------------------------------------------
+
+        elif lower.startswith(
+            "working hours:"
+        ):
+
+            value = line.split(
+                ":",
+                1
+            )[1]
+
+            metadata["job_type"] = (
+                clean_text(value)
+            )
+
+        # ---------------------------------------------
+        # Posted date
+        # ---------------------------------------------
+
+        elif (
+            "days ago" in lower
+            or "day ago" in lower
+            or "hours ago" in lower
+            or lower == "today"
+            or lower == "yesterday"
         ):
 
             if not metadata["posted"]:
+
                 metadata["posted"] = line
-
-    # --------------------------------------------------
-    # Extract location from common page text.
-    # --------------------------------------------------
-
-    location_candidates = [
-        "Nairobi",
-        "Mombasa",
-        "Kisumu",
-        "Nakuru",
-        "Eldoret",
-        "Thika",
-        "Kenya",
-        "Remote",
-        "Outside Kenya",
-        "Rest of Kenya",
-    ]
-
-    for candidate in location_candidates:
-
-        for line in lines:
-
-            if candidate.lower() == line.lower():
-
-                metadata["location"] = candidate
-
-                break
-
-        if metadata["location"]:
-            break
 
     return metadata
 
 
-def extract_company(soup):
+def extract_company(article):
     """
-    Extract company name from the job page.
+    Extract company name.
+
+    BrighterMonday pages commonly display the company
+    immediately after the job title.
+
+    We inspect the article's text instead of blindly
+    taking the first element after <h1>.
     """
 
-    # BrighterMonday job pages display the company
-    # close to the main job title.
-    heading = soup.find("h1")
-
-    if not heading:
+    if not article:
         return ""
 
-    # Look at nearby text after the title.
-    for element in heading.find_all_next():
+    lines = [
+        clean_text(line)
+        for line in article.get_text(
+            "\n",
+            strip=True
+        ).splitlines()
+        if clean_text(line)
+    ]
 
-        text = clean_text(
-            element.get_text(
+    # Find the title first.
+    heading = article.find("h1")
+
+    title = ""
+
+    if heading:
+
+        title = clean_text(
+            heading.get_text(
                 " ",
                 strip=True
             )
         )
 
-        if not text:
-            continue
+    if title in lines:
 
-        # Skip common category labels.
-        if text in [
-            "Software & Data",
-            "Engineering & Technology",
+        title_index = lines.index(
+            title
+        )
+
+        # Inspect the next few lines.
+        for line in lines[
+            title_index + 1:
+            title_index + 6
         ]:
-            continue
 
-        # Return the first useful short company name.
-        if len(text) < 150:
-            return text
+            lower = line.lower()
+
+            # Ignore obvious metadata.
+            if lower in [
+                "sales",
+                "real estate",
+                "software & data",
+                "engineering & technology",
+                "nairobi",
+                "mombasa",
+                "kisumu",
+                "nakuru",
+                "eldoret",
+                "full time",
+                "part time",
+                "contract",
+                "internship",
+                "easy apply",
+                "featured",
+                "new",
+            ]:
+
+                continue
+
+            if (
+                "ago" in lower
+                or "share" in lower
+            ):
+
+                continue
+
+            # Avoid returning extremely long text.
+            if len(line) <= 100:
+
+                return line
 
     return ""
+
+
+def extract_description(article):
+    """
+    Extract only the actual job description and
+    requirements.
+
+    Starts after:
+
+        Job descriptions & requirements
+    """
+
+    if not article:
+        return ""
+
+    lines = [
+        clean_text(line)
+        for line in article.get_text(
+            "\n",
+            strip=True
+        ).splitlines()
+        if clean_text(line)
+    ]
+
+    start_index = None
+
+    for index, line in enumerate(lines):
+
+        normalized = line.lower()
+
+        if (
+            normalized
+            == "job descriptions & requirements"
+        ):
+
+            start_index = index + 1
+
+            break
+
+    if start_index is None:
+
+        return ""
+
+    description_lines = []
+
+    # --------------------------------------------------
+    # Stop at obvious unrelated sections.
+    # --------------------------------------------------
+
+    stop_headings = {
+        "how to apply",
+        "application deadline",
+        "share this job",
+        "similar jobs",
+        "related jobs",
+    }
+
+    for line in lines[
+        start_index:
+    ]:
+
+        if line.lower() in stop_headings:
+
+            break
+
+        description_lines.append(
+            line
+        )
+
+    return "\n".join(
+        description_lines
+    )
+
+
+def extract_title(soup):
+    """Extract job title."""
+
+    heading = soup.find("h1")
+
+    if not heading:
+
+        return ""
+
+    return clean_text(
+        heading.get_text(
+            " ",
+            strip=True
+        )
+    )
 
 
 def get_job_details(job_url):
@@ -299,31 +396,24 @@ def get_job_details(job_url):
         job_url
     )
 
+    article = extract_job_article(
+        soup
+    )
+
     # ==================================================
     # TITLE
     # ==================================================
 
-    heading = soup.find("h1")
-
-    if heading:
-
-        title = clean_text(
-            heading.get_text(
-                " ",
-                strip=True
-            )
-        )
-
-    else:
-
-        title = ""
+    title = extract_title(
+        soup
+    )
 
     # ==================================================
     # METADATA
     # ==================================================
 
     metadata = extract_metadata(
-        soup
+        article
     )
 
     # ==================================================
@@ -331,7 +421,7 @@ def get_job_details(job_url):
     # ==================================================
 
     company = extract_company(
-        soup
+        article
     )
 
     # ==================================================
@@ -339,32 +429,114 @@ def get_job_details(job_url):
     # ==================================================
 
     description = extract_description(
-        soup
+        article
     )
 
-    # Fallback if structured extraction fails.
-    if not description:
+    # ==================================================
+    # RETURN
+    # ==================================================
 
-        description = clean_text(
-            soup.get_text(
+    return {
+        "title": title,
+
+        "company": company,
+
+        "location": metadata[
+            "location"
+        ],
+
+        "job_type": metadata[
+            "job_type"
+        ],
+
+        "qualification": metadata[
+            "qualification"
+        ],
+
+        "experience": metadata[
+            "experience"
+        ],
+
+        "experience_length": metadata[
+            "experience_length"
+        ],
+
+        "posted": metadata[
+            "posted"
+        ],
+
+        "deadline": "",
+
+        "description": description,
+
+        "url": job_url,
+
+        "source": "BrighterMonday",
+    }
+
+
+def collect_jobs(listing_url):
+    """
+    Collect job listings from a
+    BrighterMonday listing page.
+    """
+
+    soup = get_page(
+        listing_url
+    )
+
+    jobs = []
+
+    seen_urls = set()
+
+    # --------------------------------------------------
+    # Find job links
+    # --------------------------------------------------
+
+    for link in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = link.get(
+            "href",
+            ""
+        )
+
+        if "/listings/" not in href:
+
+            continue
+
+        job_url = urljoin(
+            BASE_URL,
+            href
+        )
+
+        if job_url in seen_urls:
+
+            continue
+
+        title = clean_text(
+            link.get_text(
                 " ",
                 strip=True
             )
         )
 
-    return {
-        "title": title,
-        "company": company,
-        "location": metadata["location"],
-        "job_type": metadata["job_type"],
-        "qualification": metadata["qualification"],
-        "experience": metadata["experience"],
-        "posted": metadata["posted"],
-        "deadline": metadata["deadline"],
-        "description": description,
-        "url": job_url,
-        "source": "BrighterMonday",
-    }
+        if not title:
+
+            continue
+
+        seen_urls.add(
+            job_url
+        )
+
+        jobs.append({
+            "title": title,
+            "url": job_url,
+        })
+
+    return jobs
 
 
 if __name__ == "__main__":
@@ -374,8 +546,13 @@ if __name__ == "__main__":
         "jobs"
     )
 
+    print("=" * 60)
+    print("BRIGHTERMONDAY COLLECTION TEST")
+    print("=" * 60)
+    print()
+
     print(
-        "Collecting BrighterMonday jobs...\n"
+        "Collecting BrighterMonday jobs..."
     )
 
     jobs = collect_jobs(
@@ -383,19 +560,100 @@ if __name__ == "__main__":
     )
 
     print(
-        f"Found {len(jobs)} jobs\n"
+        f"Found {len(jobs)} jobs"
     )
 
-    for index, job in enumerate(
-        jobs[:10],
-        start=1
-    ):
+    print()
+
+    if jobs:
+
+        first_job = jobs[0]
 
         print(
-            f"{index}. "
-            f"{job['title']}"
+            "Testing first job:"
         )
 
         print(
-            f"   {job['url']}"
+            first_job["title"]
+        )
+
+        print(
+            first_job["url"]
+        )
+
+        print()
+
+        details = get_job_details(
+            first_job["url"]
+        )
+
+        print(
+            "=" * 60
+        )
+
+        print(
+            "JOB DETAILS"
+        )
+
+        print(
+            "=" * 60
+        )
+
+        print(
+            f"Title: "
+            f"{details['title']}"
+        )
+
+        print(
+            f"Company: "
+            f"{details['company']}"
+        )
+
+        print(
+            f"Location: "
+            f"{details['location']}"
+        )
+
+        print(
+            f"Job Type: "
+            f"{details['job_type']}"
+        )
+
+        print(
+            f"Qualification: "
+            f"{details['qualification']}"
+        )
+
+        print(
+            f"Experience: "
+            f"{details['experience']}"
+        )
+
+        print(
+            f"Experience Length: "
+            f"{details['experience_length']}"
+        )
+
+        print(
+            f"Posted: "
+            f"{details['posted']}"
+        )
+
+        print(
+            f"Description length: "
+            f"{len(details['description'])}"
+        )
+
+        print()
+
+        print(
+            "DESCRIPTION PREVIEW"
+        )
+
+        print(
+            "==================="
+        )
+
+        print(
+            details["description"][:1000]
         )
