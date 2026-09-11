@@ -1,10 +1,22 @@
+
+"""
+Main job search pipeline.
+
+Collects jobs from all configured sources,
+matches them against the user's profile,
+saves them to the Excel tracker,
+and displays ranked results.
+"""
+
 from scripts.job_collector import collect_all_jobs
 from scripts.job_matcher import calculate_match
 from scripts.job_tracker import save_job
 
 
 def run_job_search():
-    """Collect, match, save, and display jobs."""
+    """
+    Collect, match, save, sort, and display jobs.
+    """
 
     print("=" * 60)
     print("AUTOMATED JOB SEARCH")
@@ -20,7 +32,9 @@ def run_job_search():
     jobs = collect_all_jobs()
 
     print()
-    print(f"Found {len(jobs)} jobs\n")
+    print(
+        f"Found {len(jobs)} jobs\n"
+    )
 
     results = []
 
@@ -36,20 +50,38 @@ def run_job_search():
         print(
             f"[{index}/{len(jobs)}] "
             f"Processing: "
-            f"{job['title']}"
+            f"{job.get('title', 'Unknown title')}"
         )
 
         try:
 
             # ------------------------------------------------
-            # Job details are already extracted by the
-            # source collector.
+            # Job details have already been extracted by the
+            # individual source scraper.
+            # ------------------------------------------------
+
+            title = job.get(
+                "title",
+                ""
+            )
+
+            description = job.get(
+                "description",
+                ""
+            )
+
+            # ------------------------------------------------
+            # Calculate match
             # ------------------------------------------------
 
             match = calculate_match(
-                job["title"],
-                job["description"]
+                title,
+                description
             )
+
+            # ------------------------------------------------
+            # Combine job details and match results
+            # ------------------------------------------------
 
             result = {
                 **job,
@@ -61,7 +93,7 @@ def run_job_search():
             )
 
             # ------------------------------------------------
-            # Save job to Excel tracker
+            # Save to Excel tracker
             # ------------------------------------------------
 
             saved = save_job(
@@ -88,16 +120,19 @@ def run_job_search():
             )
 
     # ========================================================
-    # 3. SORT BY MATCH SCORE
+    # 3. SORT RESULTS BY MATCH SCORE
     # ========================================================
 
     results.sort(
-        key=lambda job: job["score"],
+        key=lambda job: job.get(
+            "score",
+            0
+        ),
         reverse=True
     )
 
     # ========================================================
-    # 4. DISPLAY RESULTS
+    # 4. DISPLAY MATCH RESULTS
     # ========================================================
 
     print()
@@ -113,37 +148,55 @@ def run_job_search():
 
         print(
             f"{index}. "
-            f"{job['score']}% — "
-            f"{job['title']} "
+            f"{job.get('score', 0)}% — "
+            f"{job.get('title', '')} "
             f"at "
-            f"{job['company']}"
+            f"{job.get('company', '')}"
         )
+
+        # ------------------------------------------------
+        # Source
+        # ------------------------------------------------
 
         print(
             f"   Source: "
             f"{job.get('source', 'Unknown')}"
         )
 
+        # ------------------------------------------------
+        # Location
+        # ------------------------------------------------
+
         print(
             f"   Location: "
             f"{job.get('location', '')}"
         )
 
+        # ------------------------------------------------
+        # Category
+        # ------------------------------------------------
+
         print(
             f"   Category: "
-            f"{job['category']}"
+            f"{job.get('category', '')}"
         )
+
+        # ------------------------------------------------
+        # Recommendation
+        # ------------------------------------------------
 
         print(
             f"   Recommendation: "
-            f"{job['recommendation']}"
+            f"{job.get('recommendation', '')}"
         )
 
         # ------------------------------------------------
         # Role matches
         # ------------------------------------------------
 
-        if job["role_matches"]:
+        if job.get(
+            "role_matches"
+        ):
 
             print(
                 "   Role match: "
@@ -156,7 +209,9 @@ def run_job_search():
         # Matching skills
         # ------------------------------------------------
 
-        if job["matching_skills"]:
+        if job.get(
+            "matching_skills"
+        ):
 
             print(
                 "   Matching skills: "
@@ -169,7 +224,9 @@ def run_job_search():
         # Missing skills
         # ------------------------------------------------
 
-        if job["missing_skills"]:
+        if job.get(
+            "missing_skills"
+        ):
 
             print(
                 "   Missing skills: "
@@ -182,9 +239,13 @@ def run_job_search():
         # Warnings
         # ------------------------------------------------
 
-        if job["warnings"]:
+        if job.get(
+            "warnings"
+        ):
 
-            for warning in job["warnings"]:
+            for warning in job[
+                "warnings"
+            ]:
 
                 print(
                     f"   ⚠ {warning}"
@@ -195,12 +256,18 @@ def run_job_search():
         # ------------------------------------------------
 
         print(
-            f"   URL: {job['url']}"
+            f"   URL: "
+            f"{job.get('url', '')}"
         )
 
         print()
 
 
+# ============================================================
+# PROGRAM ENTRY POINT
+# ============================================================
+
 if __name__ == "__main__":
 
     run_job_search()
+
