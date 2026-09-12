@@ -1,134 +1,110 @@
-
 """
 Main job search pipeline.
 
 Collects jobs from all configured sources,
-matches them against the user's profile,
+matches them against the candidate profile,
 saves them to the Excel tracker,
-generates tailored CVs for APPLY jobs,
-and displays ranked results.
+and generates tailored CVs and cover letters
+for jobs recommended for application.
 """
 
 from pathlib import Path
+import re
 
 from scripts.job_collector import collect_all_jobs
 from scripts.job_matcher import calculate_match
 from scripts.job_tracker import save_job
 from scripts.cv_tailor import tailor_cv
+from scripts.cover_letter import generate_cover_letter
 
-
-# ============================================================
-# APPLICATIONS DIRECTORY
-# ============================================================
 
 APPLICATIONS_DIR = Path("applications")
 
 
-# ============================================================
-# APPLICATION FOLDER
-# ============================================================
-
 def create_application_directory(job):
-    """
-    Create a unique directory for a job application.
-
-    Example:
-
-        applications/
-            backend-developer-two-max-group/
-    """
-
-    title = job.get(
-        "title",
-        "unknown-job"
-    )
+    """Create a unique directory for a job application."""
 
     company = job.get(
         "company",
         "unknown-company"
     )
 
-    folder_name = (
-        f"{company}-{title}"
-        .lower()
+    title = job.get(
+        "title",
+        "unknown-job"
     )
 
-    # Replace anything unsafe for a filename.
-    import re
+    directory_name = f"{company}-{title}"
 
-    folder_name = re.sub(
+    directory_name = directory_name.lower()
+
+    directory_name = re.sub(
         r"[^a-z0-9]+",
         "-",
-        folder_name
+        directory_name
     )
 
-    folder_name = folder_name.strip("-")
+    directory_name = directory_name.strip("-")
 
-    # Limit folder name length.
-    folder_name = folder_name[:100]
+    return APPLICATIONS_DIR / directory_name
 
-    output_directory = (
-        APPLICATIONS_DIR
-        / folder_name
+
+def generate_application_documents(job, match):
+    """Generate the tailored CV and cover letter."""
+
+    application_directory = create_application_directory(
+        job
     )
 
-    output_directory.mkdir(
+    application_directory.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    return output_directory
+    # ------------------------------------------------
+    # Generate tailored CV
+    # ------------------------------------------------
 
+    print(
+        "   → Generating tailored CV..."
+    )
 
-# ============================================================
-# GENERATE TAILORED CV
-# ============================================================
+    cv_file = tailor_cv(
+        job,
+        application_directory
+    )
 
-def generate_tailored_cv(job, match):
-    """
-    Generate a tailored CV only for jobs recommended
-    as APPLY.
-    """
+    print(
+        f"   ✓ Tailored CV: {cv_file}"
+    )
 
-    if match.get(
-        "recommendation"
-    ) != "APPLY":
+    # ------------------------------------------------
+    # Generate cover letter
+    # ------------------------------------------------
 
-        return None
+    print(
+        "   → Generating cover letter..."
+    )
 
-    try:
+    cover_letter_file = generate_cover_letter(
+        job,
+        match,
+        application_directory
+    )
 
-        output_directory = (
-            create_application_directory(
-                job
-            )
-        )
+    print(
+        f"   ✓ Cover letter: {cover_letter_file}"
+    )
 
-        cv_file = tailor_cv(
-            job,
-            output_directory
-        )
+    return (
+        application_directory,
+        cv_file,
+        cover_letter_file
+    )
 
-        return cv_file
-
-    except Exception as error:
-
-        print(
-            f"   ⚠ CV tailoring failed: {error}"
-        )
-
-        return None
-
-
-# ============================================================
-# MAIN PIPELINE
-# ============================================================
 
 def run_job_search():
-    """
-    Collect, match, save, tailor, sort,
-    and display jobs.
-    """
+    """Collect, match, save, generate documents, and display jobs."""
 
     print("=" * 60)
     print("AUTOMATED JOB SEARCH")
@@ -136,7 +112,7 @@ def run_job_search():
     print()
 
     # ========================================================
-    # 1. COLLECT JOBS FROM ALL SOURCES
+    # 1. COLLECT JOBS
     # ========================================================
 
     print("Collecting jobs...\n")
@@ -144,6 +120,7 @@ def run_job_search():
     jobs = collect_all_jobs()
 
     print()
+
     print(
         f"Found {len(jobs)} jobs\n"
     )
@@ -159,35 +136,27 @@ def run_job_search():
         start=1
     ):
 
-        title = job.get(
-            "title",
-            ""
-        )
-
-        company = job.get(
-            "company",
-            "Unknown company"
-        )
-
         print(
             f"[{index}/{len(jobs)}] "
             f"Processing: "
-            f"{title}"
-        )
-
-        print(
-            f"   Company: {company}"
+            f"{job.get('title', 'Unknown title')}"
         )
 
         try:
 
-            # ------------------------------------------------
-            # Job description
-            # ------------------------------------------------
+            title = job.get(
+                "title",
+                ""
+            )
 
             description = job.get(
                 "description",
                 ""
+            )
+
+            print(
+                f"   Company: "
+                f"{job.get('company', 'Unknown')}"
             )
 
             # ------------------------------------------------
@@ -198,23 +167,6 @@ def run_job_search():
                 title,
                 description
             )
-
-            # ------------------------------------------------
-            # Combine job details and match results
-            # ------------------------------------------------
-
-            result = {
-                **job,
-                **match
-            }
-
-            results.append(
-                result
-            )
-
-            # ------------------------------------------------
-            # Display score
-            # ------------------------------------------------
 
             print(
                 f"   Score: "
@@ -232,7 +184,16 @@ def run_job_search():
             )
 
             # ------------------------------------------------
-            # Save to Excel tracker
+            # Combine job and match data
+            # ------------------------------------------------
+
+            result = {
+                **job,
+                **match
+            }
+
+            # ------------------------------------------------
+            # Save job to Excel tracker
             # ------------------------------------------------
 
             saved = save_job(
@@ -253,30 +214,61 @@ def run_job_search():
                 )
 
             # ------------------------------------------------
-            # Generate tailored CV
+            # Generate application documents
+            #
+            # Only APPLY jobs get a CV and cover letter.
             # ------------------------------------------------
 
-            if match.get(
-                "recommendation"
-            ) == "APPLY":
-
-                print(
-                    "   → Generating tailored CV..."
+            recommendation = (
+                match.get(
+                    "recommendation",
+                    ""
                 )
+                .strip()
+                .upper()
+            )
 
-                cv_file = generate_tailored_cv(
-                    job,
-                    match
-                )
+            if recommendation == "APPLY":
 
-                if cv_file:
+                try:
 
-                    print(
-                        f"   ✓ Tailored CV: "
-                        f"{cv_file}"
+                    (
+                        application_directory,
+                        cv_file,
+                        cover_letter_file
+                    ) = generate_application_documents(
+                        job,
+                        match
                     )
 
-            print()
+                    result[
+                        "application_directory"
+                    ] = str(
+                        application_directory
+                    )
+
+                    result[
+                        "cv_file"
+                    ] = str(
+                        cv_file
+                    )
+
+                    result[
+                        "cover_letter_file"
+                    ] = str(
+                        cover_letter_file
+                    )
+
+                except Exception as error:
+
+                    print(
+                        f"   ✗ Application document error: "
+                        f"{error}"
+                    )
+
+            results.append(
+                result
+            )
 
         except Exception as error:
 
@@ -284,10 +276,10 @@ def run_job_search():
                 f"   ERROR: {error}"
             )
 
-            print()
+        print()
 
     # ========================================================
-    # 3. SORT RESULTS BY MATCH SCORE
+    # 3. SORT RESULTS BY SCORE
     # ========================================================
 
     results.sort(
@@ -299,10 +291,9 @@ def run_job_search():
     )
 
     # ========================================================
-    # 4. DISPLAY MATCH RESULTS
+    # 4. DISPLAY RESULTS
     # ========================================================
 
-    print()
     print("=" * 60)
     print("JOB MATCH RESULTS")
     print("=" * 60)
@@ -361,9 +352,7 @@ def run_job_search():
         # Role matches
         # ------------------------------------------------
 
-        if job.get(
-            "role_matches"
-        ):
+        if job.get("role_matches"):
 
             print(
                 "   Role match: "
@@ -376,9 +365,7 @@ def run_job_search():
         # Matching skills
         # ------------------------------------------------
 
-        if job.get(
-            "matching_skills"
-        ):
+        if job.get("matching_skills"):
 
             print(
                 "   Matching skills: "
@@ -391,9 +378,7 @@ def run_job_search():
         # Transferable skills
         # ------------------------------------------------
 
-        if job.get(
-            "transferable_skills"
-        ):
+        if job.get("transferable_skills"):
 
             print(
                 "   Transferable skills: "
@@ -406,9 +391,7 @@ def run_job_search():
         # Missing skills
         # ------------------------------------------------
 
-        if job.get(
-            "missing_skills"
-        ):
+        if job.get("missing_skills"):
 
             print(
                 "   Missing skills: "
@@ -421,46 +404,60 @@ def run_job_search():
         # Experience
         # ------------------------------------------------
 
-        if job.get(
-            "experience_level"
-        ):
+        if job.get("experience"):
 
             print(
                 f"   Experience: "
-                f"{job['experience_level']}"
+                f"{job.get('experience')}"
             )
 
         # ------------------------------------------------
         # Years required
         # ------------------------------------------------
 
-        if job.get(
-            "years_required"
-        ) is not None:
+        if job.get("years_required"):
 
             print(
                 f"   Years required: "
-                f"{job['years_required']}"
+                f"{job.get('years_required')}"
             )
 
         # ------------------------------------------------
         # Warnings
         # ------------------------------------------------
 
-        if job.get(
-            "warnings"
-        ):
+        if job.get("warnings"):
 
-            for warning in job[
-                "warnings"
-            ]:
+            for warning in job["warnings"]:
 
                 print(
                     f"   ⚠ {warning}"
                 )
 
         # ------------------------------------------------
-        # URL
+        # Generated CV
+        # ------------------------------------------------
+
+        if job.get("cv_file"):
+
+            print(
+                f"   CV: "
+                f"{job['cv_file']}"
+            )
+
+        # ------------------------------------------------
+        # Generated cover letter
+        # ------------------------------------------------
+
+        if job.get("cover_letter_file"):
+
+            print(
+                f"   Cover letter: "
+                f"{job['cover_letter_file']}"
+            )
+
+        # ------------------------------------------------
+        # Job URL
         # ------------------------------------------------
 
         print(
@@ -476,6 +473,4 @@ def run_job_search():
 # ============================================================
 
 if __name__ == "__main__":
-
     run_job_search()
-
