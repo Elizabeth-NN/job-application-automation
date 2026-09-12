@@ -10,6 +10,37 @@
 
   "professional_summary": "Junior Software Developer with hands-on experience in full-stack web development using Python/Flask, React, and JavaScript. Proven ability to contribute to team projects as Assistant Team Lead, handling backend development, schema design, and database implementation. Seeking an opportunity to grow and apply technical skills in a software engineering role.",
 
+    "target_roles": [
+    "Junior Software Developer",
+    "Junior Software Engineer",
+    "Backend Developer",
+    "Backend Engineer",
+    "Python Developer",
+    "Flask Developer",
+    "Junior Full Stack Developer",
+    "Full Stack Developer",
+    "Fullstack Developer",
+    "React Developer",
+    "Frontend Developer",
+    "Frontend Engineer",
+    "Web Developer",
+    "Software Developer",
+    "Software Engineer"
+  ],
+
+  "preferred_locations": [
+    "Kenya",
+    "Nairobi",
+    "Remote",
+    "Hybrid"
+  ],
+
+  "experience_levels": [
+    "Entry Level",
+    "Junior",
+    "Graduate",
+    "Internship"
+  ],
   "technical_skills": {
     "frontend": [
       "HTML",
