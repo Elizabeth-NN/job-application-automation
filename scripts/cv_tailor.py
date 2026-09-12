@@ -1,22 +1,18 @@
-
 """
 CV tailoring engine.
 
-Uses candidate_profile.json as the single source of truth and
-creates a tailored CV for a specific job.
+Generates a tailored CV for a specific job using the candidate
+profile stored in data/candidate_profile.json.
 
-The tailor:
+The tailoring process:
+
     1. Loads the candidate profile.
-    2. Extracts job text.
-    3. Identifies relevant candidate skills.
-    4. Selects relevant experience.
-    5. Selects relevant projects.
+    2. Builds searchable job text.
+    3. Selects relevant technical skills.
+    4. Selects relevant professional experience.
+    5. Ranks projects by relevance.
     6. Creates a job-specific professional summary.
-    7. Generates a Word CV.
-
-Important:
-    The system must never invent skills, experience, education,
-    responsibilities, employers, or technologies.
+    7. Generates a formatted Word CV.
 """
 
 import json
@@ -32,40 +28,28 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 # PATHS
 # ============================================================
 
-PROFILE_FILE = Path("data/candidate_profile.json")
-APPLICATIONS_DIR = Path("applications")
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+PROFILE_FILE = BASE_DIR / "data" / "candidate_profile.json"
+
+APPLICATIONS_DIR = BASE_DIR / "applications"
 
 
 # ============================================================
-# PROFILE
-# ============================================================
-
-def load_candidate_profile():
-    """
-    Load the candidate profile from candidate_profile.json.
-    """
-
-    if not PROFILE_FILE.exists():
-        raise FileNotFoundError(
-            f"Candidate profile not found: {PROFILE_FILE}"
-        )
-
-    with open(
-        PROFILE_FILE,
-        "r",
-        encoding="utf-8"
-    ) as file:
-
-        return json.load(file)
-
-
-# ============================================================
-# TEXT HELPERS
+# TEXT NORMALIZATION
 # ============================================================
 
 def normalize_text(text):
     """
     Normalize text for keyword matching.
+
+    Converts text to lowercase and keeps characters useful
+    for technical terms such as:
+        C#
+        .NET
+        Node.js
+        Next.js
+        REST APIs
     """
 
     if not text:
@@ -73,8 +57,10 @@ def normalize_text(text):
 
     text = str(text).lower()
 
+    text = text.replace("’", "'")
+
     text = re.sub(
-        r"[^a-z0-9+#./\- ]",
+        r"[^a-z0-9+#.\-/ ]",
         " ",
         text
     )
@@ -90,8 +76,7 @@ def normalize_text(text):
 
 def contains_term(text, term):
     """
-    Determine whether a complete word or phrase appears
-    in the supplied text.
+    Check whether a complete word or phrase exists in text.
     """
 
     text = normalize_text(text)
@@ -112,40 +97,59 @@ def contains_term(text, term):
     ) is not None
 
 
-def build_job_text(job):
+# ============================================================
+# PROFILE
+# ============================================================
+
+def load_candidate_profile():
     """
-    Combine all useful job information into one searchable
-    text string.
+    Load candidate profile from JSON.
+    """
+
+    if not PROFILE_FILE.exists():
+
+        raise FileNotFoundError(
+            f"Candidate profile not found: {PROFILE_FILE}"
+        )
+
+    try:
+
+        with open(
+            PROFILE_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            return json.load(file)
+
+    except json.JSONDecodeError as error:
+
+        raise ValueError(
+            f"Invalid JSON in {PROFILE_FILE}: "
+            f"{error}"
+        ) from error
+
+
+# ============================================================
+# JOB TEXT
+# ============================================================
+
+def get_job_text(job):
+    """
+    Build one searchable text string from a job.
     """
 
     return normalize_text(
         f"""
         {job.get("title", "")}
+        {job.get("company", "")}
+        {job.get("location", "")}
         {job.get("description", "")}
         {job.get("requirements", "")}
         {job.get("skills", "")}
-        {job.get("location", "")}
         {job.get("qualification", "")}
         {job.get("experience", "")}
         """
-    )
-
-
-# ============================================================
-# JOB KEYWORDS
-# ============================================================
-
-def get_job_keywords(job):
-    """
-    Return individual normalized job keywords.
-
-    This is mainly useful for general text-overlap checks.
-    """
-
-    job_text = build_job_text(job)
-
-    return set(
-        job_text.split()
     )
 
 
@@ -158,20 +162,120 @@ def skill_is_relevant(skill, job_text):
     Determine whether a candidate skill appears in the job.
     """
 
-    return contains_term(
+    normalized_skill = normalize_text(skill)
+
+    if not normalized_skill:
+        return False
+
+    # --------------------------------------------------------
+    # Direct match
+    # --------------------------------------------------------
+
+    if contains_term(
         job_text,
-        skill
-    )
+        normalized_skill
+    ):
+        return True
+
+    # --------------------------------------------------------
+    # Useful aliases
+    # --------------------------------------------------------
+
+    aliases = {
+
+        "react.js": [
+            "react",
+            "reactjs",
+        ],
+
+        "next.js": [
+            "next.js",
+            "nextjs",
+            "next js",
+        ],
+
+        "flask-restful": [
+            "flask-restful",
+            "flask restful",
+            "restful api",
+            "rest api",
+            "rest apis",
+        ],
+
+        "rest apis": [
+            "rest api",
+            "rest apis",
+            "restful api",
+            "restful apis",
+            "api development",
+        ],
+
+        "database design": [
+            "database design",
+            "database schema",
+            "schema design",
+            "database development",
+        ],
+
+        "database implementation": [
+            "database implementation",
+            "database development",
+            "database design",
+        ],
+
+        "tailwind css": [
+            "tailwind",
+            "tailwind css",
+        ],
+
+        "sqlalchemy": [
+            "sqlalchemy",
+        ],
+
+        "html": [
+            "html",
+            "html5",
+        ],
+
+        "css": [
+            "css",
+            "css3",
+        ],
+
+        "javascript": [
+            "javascript",
+            "js",
+        ],
+
+        "github": [
+            "github",
+        ],
+    }
+
+    for alias in aliases.get(
+        normalized_skill,
+        []
+    ):
+
+        if contains_term(
+            job_text,
+            alias
+        ):
+
+            return True
+
+    return False
 
 
 def select_relevant_skills(profile, job):
     """
-    Select candidate skills that appear in the job.
+    Select candidate skills relevant to the job.
 
-    Skills are kept under their original profile categories.
+    Returns skills grouped according to the structure in
+    candidate_profile.json.
     """
 
-    job_text = build_job_text(job)
+    job_text = get_job_text(job)
 
     relevant = {}
 
@@ -198,158 +302,21 @@ def select_relevant_skills(profile, job):
     return relevant
 
 
-def get_all_candidate_skills(profile):
-    """
-    Flatten all candidate technical skills into one list.
-    """
-
-    skills = []
-
-    for skill_list in profile.get(
-        "technical_skills",
-        {}
-    ).values():
-
-        skills.extend(skill_list)
-
-    return list(
-        dict.fromkeys(skills)
-    )
-
-
 # ============================================================
-# EXPERIENCE RELEVANCE
+# EXPERIENCE MATCHING
 # ============================================================
 
-def calculate_text_overlap(text_a, text_b):
+def get_experience_text(experience):
     """
-    Calculate simple meaningful word overlap between two texts.
-    """
-
-    words_a = set(
-        normalize_text(text_a).split()
-    )
-
-    words_b = set(
-        normalize_text(text_b).split()
-    )
-
-    return len(
-        words_a.intersection(words_b)
-    )
-
-
-def select_relevant_experience(profile, job):
-    """
-    Select experience relevant to the job.
-
-    Software experience is strongly prioritized.
-
-    Other experience can still be retained when there is
-    meaningful overlap with the job.
+    Convert one experience entry into searchable text.
     """
 
-    job_text = build_job_text(job)
-
-    selected = []
-
-    for experience in profile.get(
-        "experience",
-        []
-    ):
-
-        experience_text = normalize_text(
-            f"""
-            {experience.get("title", "")}
-            {experience.get("company", "")}
-            {' '.join(
-                experience.get(
-                    "responsibilities",
-                    []
-                )
-            )}
-            """
-        )
-
-        software_indicators = [
-            "software",
-            "developer",
-            "development",
-            "backend",
-            "frontend",
-            "python",
-            "flask",
-            "api",
-            "programming",
-            "database",
-            "react",
-            "javascript",
-        ]
-
-        is_software_experience = any(
-            contains_term(
-                experience_text,
-                indicator
-            )
-            for indicator in software_indicators
-        )
-
-        if is_software_experience:
-
-            selected.append(
-                experience
-            )
-
-            continue
-
-        overlap = calculate_text_overlap(
-            job_text,
-            experience_text
-        )
-
-        if overlap >= 2:
-
-            selected.append(
-                experience
-            )
-
-    return selected
-
-
-# ============================================================
-# PROJECT RELEVANCE
-# ============================================================
-
-def score_project(project, job_text):
-    """
-    Calculate project relevance.
-
-    Matching technologies receive stronger weight than
-    general word overlap.
-    """
-
-    technologies = project.get(
-        "technologies",
-        []
-    )
-
-    technology_matches = 0
-
-    for technology in technologies:
-
-        if contains_term(
-            job_text,
-            technology
-        ):
-
-            technology_matches += 1
-
-    project_text = normalize_text(
+    return normalize_text(
         f"""
-        {project.get("name", "")}
-        {project.get("description", "")}
+        {experience.get("title", "")}
+        {experience.get("company", "")}
         {' '.join(
-            project.get(
+            experience.get(
                 "responsibilities",
                 []
             )
@@ -357,52 +324,157 @@ def score_project(project, job_text):
         """
     )
 
-    overlap = calculate_text_overlap(
-        job_text,
-        project_text
-    )
 
-    return (
-        technology_matches * 5
-        + overlap
-    )
-
-
-def select_relevant_projects(profile, job):
+def calculate_experience_relevance(
+    experience,
+    job_text
+):
     """
-    Select the strongest projects for the job.
+    Calculate relevance of one experience entry.
 
-    Projects are ranked rather than simply selected based
-    on whether they contain one matching word.
+    Software engineering experience receives a strong
+    baseline because it is directly relevant to the target
+    roles.
+
+    Other experience must demonstrate meaningful overlap.
     """
 
-    job_text = build_job_text(job)
-
-    projects = profile.get(
-        "projects",
-        []
+    experience_text = get_experience_text(
+        experience
     )
 
-    scored_projects = []
+    score = 0
 
-    for index, project in enumerate(
-        projects
+    # --------------------------------------------------------
+    # Strong technical indicators
+    # --------------------------------------------------------
+
+    technical_terms = [
+        "python",
+        "flask",
+        "rest api",
+        "rest apis",
+        "api",
+        "backend",
+        "frontend",
+        "software",
+        "javascript",
+        "react",
+        "database",
+        "sql",
+        "development",
+        "programming",
+    ]
+
+    for term in technical_terms:
+
+        if (
+            contains_term(
+                experience_text,
+                term
+            )
+            and contains_term(
+                job_text,
+                term
+            )
+        ):
+
+            score += 3
+
+    # --------------------------------------------------------
+    # Job-specific keyword overlap
+    # --------------------------------------------------------
+
+    job_words = set(
+        job_text.split()
+    )
+
+    experience_words = set(
+        experience_text.split()
+    )
+
+    meaningful_overlap = (
+        job_words.intersection(
+            experience_words
+        )
+    )
+
+    score += min(
+        len(meaningful_overlap),
+        6
+    )
+
+    # --------------------------------------------------------
+    # Direct software experience
+    # --------------------------------------------------------
+
+    title = normalize_text(
+        experience.get(
+            "title",
+            ""
+        )
+    )
+
+    software_titles = [
+        "software engineer",
+        "software developer",
+        "developer",
+        "engineer",
+        "web developer",
+        "backend developer",
+        "frontend developer",
+    ]
+
+    if any(
+        contains_term(title, item)
+        for item in software_titles
     ):
 
-        score = score_project(
-            project,
+        score += 10
+
+    return score
+
+
+def select_relevant_experience(
+    profile,
+    job,
+    max_items=3
+):
+    """
+    Select the most relevant professional experiences.
+
+    Software engineering experience is prioritized.
+
+    Non-software experience is included only when it provides
+    meaningful relevance to the target position.
+    """
+
+    job_text = get_job_text(job)
+
+    scored = []
+
+    for index, experience in enumerate(
+        profile.get(
+            "experience",
+            []
+        )
+    ):
+
+        score = calculate_experience_relevance(
+            experience,
             job_text
         )
 
-        scored_projects.append(
+        scored.append(
             (
                 score,
                 index,
-                project
+                experience
             )
         )
 
-    scored_projects.sort(
+    # Highest relevance first.
+    scored.sort(
         key=lambda item: (
             item[0],
             -item[1]
@@ -410,106 +482,441 @@ def select_relevant_projects(profile, job):
         reverse=True
     )
 
-    # Keep the strongest 3 projects.
+    selected = []
+
+    for score, index, experience in scored:
+
+        # ----------------------------------------------------
+        # Software experience gets priority.
+        # ----------------------------------------------------
+
+        experience_title = normalize_text(
+            experience.get(
+                "title",
+                ""
+            )
+        )
+
+        is_software = any(
+            contains_term(
+                experience_title,
+                keyword
+            )
+            for keyword in [
+                "software",
+                "developer",
+                "engineer",
+            ]
+        )
+
+        # ----------------------------------------------------
+        # Include strong matches.
+        # ----------------------------------------------------
+
+        if score >= 8:
+
+            selected.append(
+                experience
+            )
+
+        # ----------------------------------------------------
+        # Software experience gets included even when the
+        # job description has few matching keywords.
+        # ----------------------------------------------------
+
+        elif is_software and score >= 3:
+
+            selected.append(
+                experience
+            )
+
+        if len(selected) >= max_items:
+
+            break
+
+    # --------------------------------------------------------
+    # Ensure software engineering internship is retained.
+    # --------------------------------------------------------
+
+    software_experience = None
+
+    for experience in profile.get(
+        "experience",
+        []
+    ):
+
+        title = normalize_text(
+            experience.get(
+                "title",
+                ""
+            )
+        )
+
+        if (
+            "software engineering" in title
+            or "software developer" in title
+        ):
+
+            software_experience = experience
+            break
+
+    if (
+        software_experience
+        and software_experience not in selected
+    ):
+
+        if len(selected) >= max_items:
+
+            selected[-1] = software_experience
+
+        else:
+
+            selected.insert(
+                0,
+                software_experience
+            )
+
+    return selected[:max_items]
+
+
+# ============================================================
+# PROJECT MATCHING
+# ============================================================
+
+def get_project_text(project):
+    """
+    Convert project information into searchable text.
+    """
+
+    return normalize_text(
+        f"""
+        {project.get("name", "")}
+        {project.get("description", "")}
+        {project.get("role", "")}
+        {' '.join(
+            project.get(
+                "responsibilities",
+                []
+            )
+        )}
+        {' '.join(
+            project.get(
+                "technologies",
+                []
+            )
+        )}
+        """
+    )
+
+
+def calculate_project_relevance(
+    project,
+    job_text
+):
+    """
+    Calculate project relevance.
+
+    Direct technology matches are weighted more heavily than
+    generic word overlap.
+    """
+
+    project_text = get_project_text(
+        project
+    )
+
+    score = 0
+
+    # --------------------------------------------------------
+    # Technical technology matches
+    # --------------------------------------------------------
+
+    technologies = project.get(
+        "technologies",
+        []
+    )
+
+    for technology in technologies:
+
+        if skill_is_relevant(
+            technology,
+            job_text
+        ):
+
+            score += 5
+
+    # --------------------------------------------------------
+    # Project responsibilities
+    # --------------------------------------------------------
+
+    responsibilities = project.get(
+        "responsibilities",
+        []
+    )
+
+    for responsibility in responsibilities:
+
+        responsibility_text = normalize_text(
+            responsibility
+        )
+
+        if (
+            "backend" in responsibility_text
+            and (
+                "backend" in job_text
+                or "server" in job_text
+                or "api" in job_text
+            )
+        ):
+
+            score += 4
+
+        if (
+            "frontend" in responsibility_text
+            and (
+                "frontend" in job_text
+                or "front end" in job_text
+                or "react" in job_text
+            )
+        ):
+
+            score += 4
+
+        if (
+            "database" in responsibility_text
+            and (
+                "database" in job_text
+                or "sql" in job_text
+            )
+        ):
+
+            score += 4
+
+    # --------------------------------------------------------
+    # Keyword overlap
+    # --------------------------------------------------------
+
+    job_words = set(
+        job_text.split()
+    )
+
+    project_words = set(
+        project_text.split()
+    )
+
+    overlap = job_words.intersection(
+        project_words
+    )
+
+    score += min(
+        len(overlap),
+        8
+    )
+
+    return score
+
+
+def select_relevant_projects(
+    profile,
+    job,
+    max_items=3
+):
+    """
+    Select the most relevant projects.
+
+    Projects are ranked rather than simply selected in their
+    original profile order.
+    """
+
+    job_text = get_job_text(job)
+
+    scored = []
+
+    for index, project in enumerate(
+        profile.get(
+            "projects",
+            []
+        )
+    ):
+
+        score = calculate_project_relevance(
+            project,
+            job_text
+        )
+
+        scored.append(
+            (
+                score,
+                index,
+                project
+            )
+        )
+
+    scored.sort(
+        key=lambda item: (
+            item[0],
+            -item[1]
+        ),
+        reverse=True
+    )
+
     selected = [
-        item[2]
-        for item in scored_projects[:3]
+        project
+        for score, index, project
+        in scored
+        if score > 0
     ]
 
-    return selected
+    # --------------------------------------------------------
+    # If nothing matches, keep the strongest projects from
+    # the candidate profile.
+    # --------------------------------------------------------
+
+    if not selected:
+
+        selected = profile.get(
+            "projects",
+            []
+        )[:max_items]
+
+    return selected[:max_items]
+
+
+# ============================================================
+# TARGET ROLE
+# ============================================================
+
+def detect_target_role(job):
+    """
+    Determine the role name to use in the tailored summary.
+    """
+
+    title = job.get(
+        "title",
+        ""
+    ).strip()
+
+    if title:
+
+        return title
+
+    return "Software Developer"
 
 
 # ============================================================
 # SUMMARY
 # ============================================================
 
-def get_candidate_primary_skills(profile):
+def build_tailored_summary(
+    profile,
+    job,
+    relevant_skills
+):
     """
-    Return the candidate's strongest backend/full-stack skills.
+    Build a concise job-specific professional summary.
 
-    These come directly from candidate_profile.json.
+    Only uses information contained in the candidate profile.
     """
 
-    preferred = [
-        "Python",
-        "Flask",
-        "REST APIs",
-        "React.js",
-        "JavaScript",
-        "Database Design",
-    ]
-
-    available = get_all_candidate_skills(
-        profile
+    target_role = detect_target_role(
+        job
     )
 
-    selected = []
+    # --------------------------------------------------------
+    # Collect selected skills in a sensible order.
+    # --------------------------------------------------------
 
-    for skill in preferred:
+    priority_categories = [
+        "backend",
+        "frontend",
+        "databases",
+        "tools_and_other",
+    ]
 
-        for available_skill in available:
+    selected_skills = []
 
-            if normalize_text(
-                skill
-            ) == normalize_text(
-                available_skill
-            ):
+    for category in priority_categories:
 
-                selected.append(
-                    available_skill
+        for skill in relevant_skills.get(
+            category,
+            []
+        ):
+
+            if skill not in selected_skills:
+
+                selected_skills.append(
+                    skill
                 )
 
-    return selected
+    # --------------------------------------------------------
+    # Limit summary length.
+    # --------------------------------------------------------
 
+    selected_skills = selected_skills[:6]
 
-def create_tailored_summary(profile, job):
-    """
-    Create a concise job-specific professional summary.
+    if selected_skills:
 
-    All technologies and experience mentioned must exist
-    in candidate_profile.json.
-    """
-
-    candidate_skills = (
-        get_candidate_primary_skills(
-            profile
-        )
-    )
-
-    job_text = build_job_text(job)
-
-    matching_primary_skills = [
-        skill
-        for skill in candidate_skills
-        if contains_term(
-            job_text,
-            skill
-        )
-    ]
-
-    if not matching_primary_skills:
-        matching_primary_skills = (
-            candidate_skills[:4]
+        skill_text = ", ".join(
+            selected_skills
         )
 
-    skills_text = ", ".join(
-        matching_primary_skills
+    else:
+
+        skill_text = (
+            "full-stack web development"
+        )
+
+    # --------------------------------------------------------
+    # Determine focus from job title.
+    # --------------------------------------------------------
+
+    normalized_title = normalize_text(
+        target_role
     )
 
-    job_title = job.get(
-        "title",
-        "software engineering role"
-    )
+    if (
+        "backend" in normalized_title
+        or "back end" in normalized_title
+    ):
+
+        focus = (
+            "backend development, REST API "
+            "development, and database implementation"
+        )
+
+    elif (
+        "frontend" in normalized_title
+        or "front end" in normalized_title
+    ):
+
+        focus = (
+            "frontend development and "
+            "web application development"
+        )
+
+    elif (
+        "full stack" in normalized_title
+        or "fullstack" in normalized_title
+    ):
+
+        focus = (
+            "full-stack web development, "
+            "backend services, and frontend applications"
+        )
+
+    else:
+
+        focus = (
+            "software development and "
+            "practical web application development"
+        )
 
     summary = (
-        "Junior Software Developer with hands-on "
-        "experience in full-stack web development "
-        f"using {skills_text}. "
-        "Experienced in backend development, REST API "
-        "development, database design, and contributing "
-        "to team-based software projects. "
-        f"Seeking to contribute these skills as a "
-        f"{job_title}."
+        "Junior Software Developer with hands-on experience "
+        f"building web applications using {skill_text}. "
+        f"Experienced in {focus}, collaborating on team-based "
+        "software projects, and implementing practical "
+        f"technical solutions. Seeking to contribute these "
+        f"skills as a {target_role}."
     )
 
     return summary
@@ -521,15 +928,17 @@ def create_tailored_summary(profile, job):
 
 def create_document():
     """
-    Create a new Word document with basic formatting.
+    Create a new Word document with basic CV formatting.
     """
 
     document = Document()
 
     styles = document.styles
 
-    styles["Normal"].font.name = "Arial"
-    styles["Normal"].font.size = Pt(10)
+    normal_style = styles["Normal"]
+
+    normal_style.font.name = "Arial"
+    normal_style.font.size = Pt(10)
 
     return document
 
@@ -537,10 +946,10 @@ def create_document():
 def add_heading(
     document,
     text,
-    size=14
+    size=12
 ):
     """
-    Add a formatted section heading.
+    Add a formatted CV section heading.
     """
 
     paragraph = document.add_paragraph()
@@ -549,7 +958,7 @@ def add_heading(
     paragraph.paragraph_format.space_after = Pt(3)
 
     run = paragraph.add_run(
-        text
+        text.upper()
     )
 
     run.bold = True
@@ -564,27 +973,27 @@ def add_bullet(
     text
 ):
     """
-    Add a bullet point.
+    Add a CV bullet point.
     """
 
     paragraph = document.add_paragraph(
         style="List Bullet"
     )
 
-    paragraph.paragraph_format.space_after = Pt(2)
+    paragraph.paragraph_format.space_after = Pt(1)
 
     run = paragraph.add_run(
         text
     )
 
     run.font.name = "Arial"
-    run.font.size = Pt(10)
+    run.font.size = Pt(9.5)
 
     return paragraph
 
 
 # ============================================================
-# HEADER
+# CONTACT HEADER
 # ============================================================
 
 def add_contact_header(
@@ -595,7 +1004,14 @@ def add_contact_header(
     Add candidate contact information.
     """
 
-    personal = profile["personal"]
+    personal = profile.get(
+        "personal",
+        {}
+    )
+
+    # --------------------------------------------------------
+    # Name
+    # --------------------------------------------------------
 
     paragraph = document.add_paragraph()
 
@@ -603,32 +1019,22 @@ def add_contact_header(
         WD_ALIGN_PARAGRAPH.CENTER
     )
 
+    paragraph.paragraph_format.space_after = Pt(2)
+
     run = paragraph.add_run(
-        personal["name"]
+        personal.get(
+            "name",
+            ""
+        )
     )
 
     run.bold = True
     run.font.name = "Arial"
     run.font.size = Pt(18)
 
-    paragraph = document.add_paragraph()
-
-    paragraph.alignment = (
-        WD_ALIGN_PARAGRAPH.CENTER
-    )
-
-    contact = (
-        f"{personal['phone']} | "
-        f"{personal['email']} | "
-        f"{personal['location']}"
-    )
-
-    run = paragraph.add_run(
-        contact
-    )
-
-    run.font.name = "Arial"
-    run.font.size = Pt(9)
+    # --------------------------------------------------------
+    # Contact information
+    # --------------------------------------------------------
 
     paragraph = document.add_paragraph()
 
@@ -636,17 +1042,70 @@ def add_contact_header(
         WD_ALIGN_PARAGRAPH.CENTER
     )
 
-    links = (
-        f"{personal['linkedin']} | "
-        f"{personal['github']}"
-    )
+    paragraph.paragraph_format.space_after = Pt(1)
+
+    contact_items = []
+
+    for key in [
+        "phone",
+        "email",
+        "location",
+    ]:
+
+        value = personal.get(
+            key
+        )
+
+        if value:
+
+            contact_items.append(
+                value
+            )
 
     run = paragraph.add_run(
-        links
+        " | ".join(contact_items)
     )
 
     run.font.name = "Arial"
     run.font.size = Pt(9)
+
+    # --------------------------------------------------------
+    # Professional links
+    # --------------------------------------------------------
+
+    links = []
+
+    for key in [
+        "linkedin",
+        "github",
+    ]:
+
+        value = personal.get(
+            key
+        )
+
+        if value:
+
+            links.append(
+                value
+            )
+
+    if links:
+
+        paragraph = document.add_paragraph()
+
+        paragraph.alignment = (
+            WD_ALIGN_PARAGRAPH.CENTER
+        )
+
+        paragraph.paragraph_format.space_after = Pt(5)
+
+        run = paragraph.add_run(
+            " | ".join(links)
+        )
+
+        run.font.name = "Arial"
+        run.font.size = Pt(9)
 
 
 # ============================================================
@@ -663,14 +1122,19 @@ def add_summary(
 
     add_heading(
         document,
-        "PROFESSIONAL SUMMARY"
+        "Professional Summary"
     )
 
     paragraph = document.add_paragraph(
         summary
     )
 
-    paragraph.paragraph_format.space_after = Pt(6)
+    paragraph.paragraph_format.space_after = Pt(5)
+
+    for run in paragraph.runs:
+
+        run.font.name = "Arial"
+        run.font.size = Pt(9.5)
 
 
 # ============================================================
@@ -682,36 +1146,57 @@ def add_skills(
     skills
 ):
     """
-    Add relevant technical skills.
+    Add relevant technical skills grouped by category.
     """
+
+    if not skills:
+
+        return
 
     add_heading(
         document,
-        "TECHNICAL SKILLS"
+        "Technical Skills"
     )
+
+    category_names = {
+        "frontend": "Frontend",
+        "backend": "Backend",
+        "databases": "Databases",
+        "tools_and_other": "Tools & Other",
+    }
 
     for category, skill_list in skills.items():
 
         if not skill_list:
+
             continue
 
-        category_name = (
-            category
-            .replace("_", " ")
-            .title()
+        category_name = category_names.get(
+            category,
+            category.replace(
+                "_",
+                " "
+            ).title()
         )
 
         paragraph = document.add_paragraph()
+
+        paragraph.paragraph_format.space_after = Pt(1)
 
         run = paragraph.add_run(
             f"{category_name}: "
         )
 
         run.bold = True
+        run.font.name = "Arial"
+        run.font.size = Pt(9.5)
 
-        paragraph.add_run(
+        run = paragraph.add_run(
             ", ".join(skill_list)
         )
+
+        run.font.name = "Arial"
+        run.font.size = Pt(9.5)
 
 
 # ============================================================
@@ -723,26 +1208,32 @@ def add_experience(
     experience
 ):
     """
-    Add selected work experience.
+    Add selected professional experience.
     """
+
+    if not experience:
+
+        return
 
     add_heading(
         document,
-        "WORK EXPERIENCE"
+        "Work Experience"
     )
 
     for item in experience:
 
         paragraph = document.add_paragraph()
 
-        run = paragraph.add_run(
-            item["title"]
+        paragraph.paragraph_format.space_after = Pt(1)
+
+        title = item.get(
+            "title",
+            ""
         )
 
-        run.bold = True
-
-        paragraph.add_run(
-            f" | {item['company']}"
+        company = item.get(
+            "company",
+            ""
         )
 
         start_date = item.get(
@@ -755,17 +1246,41 @@ def add_experience(
             ""
         )
 
+        run = paragraph.add_run(
+            title
+        )
+
+        run.bold = True
+        run.font.name = "Arial"
+        run.font.size = Pt(10)
+
+        if company:
+
+            run = paragraph.add_run(
+                f" | {company}"
+            )
+
+            run.font.name = "Arial"
+            run.font.size = Pt(10)
+
         if start_date:
 
-            paragraph.add_run(
+            date_text = (
                 f" | {start_date}"
             )
 
             if end_date:
 
-                paragraph.add_run(
+                date_text += (
                     f" – {end_date}"
                 )
+
+            run = paragraph.add_run(
+                date_text
+            )
+
+            run.font.name = "Arial"
+            run.font.size = Pt(9)
 
         for responsibility in item.get(
             "responsibilities",
@@ -790,26 +1305,44 @@ def add_projects(
     Add selected projects.
     """
 
+    if not projects:
+
+        return
+
     add_heading(
         document,
-        "PROJECTS"
+        "Projects"
     )
 
     for project in projects:
 
         paragraph = document.add_paragraph()
 
+        paragraph.paragraph_format.space_after = Pt(1)
+
         run = paragraph.add_run(
-            project["name"]
+            project.get(
+                "name",
+                ""
+            )
         )
 
         run.bold = True
+        run.font.name = "Arial"
+        run.font.size = Pt(10)
 
-        if project.get("github"):
+        github = project.get(
+            "github"
+        )
 
-            paragraph.add_run(
-                f" | {project['github']}"
+        if github:
+
+            run = paragraph.add_run(
+                f" | {github}"
             )
+
+            run.font.name = "Arial"
+            run.font.size = Pt(9)
 
         description = project.get(
             "description",
@@ -822,11 +1355,16 @@ def add_projects(
                 description
             )
 
-            paragraph.paragraph_format.space_after = (
-                Pt(2)
-            )
+            paragraph.paragraph_format.space_after = Pt(1)
 
-        if project.get("role"):
+            for run in paragraph.runs:
+
+                run.font.name = "Arial"
+                run.font.size = Pt(9.5)
+
+        if project.get(
+            "role"
+        ):
 
             add_bullet(
                 document,
@@ -843,13 +1381,18 @@ def add_projects(
                 responsibility
             )
 
-        if project.get("technologies"):
+        technologies = project.get(
+            "technologies",
+            []
+        )
+
+        if technologies:
 
             add_bullet(
                 document,
                 "Technologies: "
                 + ", ".join(
-                    project["technologies"]
+                    technologies
                 )
             )
 
@@ -863,159 +1406,243 @@ def add_education(
     education
 ):
     """
-    Add education.
+    Add education history.
     """
+
+    if not education:
+
+        return
 
     add_heading(
         document,
-        "EDUCATION"
+        "Education"
     )
 
     for item in education:
 
         paragraph = document.add_paragraph()
 
+        paragraph.paragraph_format.space_after = Pt(1)
+
+        qualification = item.get(
+            "qualification",
+            ""
+        )
+
+        institution = item.get(
+            "institution",
+            ""
+        )
+
         run = paragraph.add_run(
-            item["qualification"]
+            qualification
         )
 
         run.bold = True
+        run.font.name = "Arial"
+        run.font.size = Pt(9.5)
 
-        paragraph.add_run(
-            f" | {item['institution']}"
-        )
+        if institution:
 
-        if item.get("start_date"):
+            run = paragraph.add_run(
+                f" | {institution}"
+            )
 
-            paragraph.add_run(
+            run.font.name = "Arial"
+            run.font.size = Pt(9.5)
+
+        if item.get(
+            "start_date"
+        ):
+
+            date_text = (
                 f" | {item['start_date']}"
             )
 
-            if item.get("end_date"):
+            if item.get(
+                "end_date"
+            ):
 
-                paragraph.add_run(
+                date_text += (
                     f" – {item['end_date']}"
                 )
 
-        if item.get("grade"):
+            run = paragraph.add_run(
+                date_text
+            )
 
-            paragraph.add_run(
+            run.font.name = "Arial"
+            run.font.size = Pt(9)
+
+        if item.get(
+            "grade"
+        ):
+
+            run = paragraph.add_run(
                 f" | Grade: {item['grade']}"
             )
 
+            run.font.name = "Arial"
+            run.font.size = Pt(9)
+
 
 # ============================================================
-# MAIN TAILORING FUNCTION
+# FILE NAME
+# ============================================================
+
+def create_application_directory(
+    job,
+    base_directory=APPLICATIONS_DIR
+):
+    """
+    Create a safe directory name for a job application.
+    """
+
+    company = normalize_text(
+        job.get(
+            "company",
+            "company"
+        )
+    )
+
+    title = normalize_text(
+        job.get(
+            "title",
+            "software-job"
+        )
+    )
+
+    folder_name = (
+        f"{company}-{title}"
+    )
+
+    # Convert spaces and punctuation into hyphens.
+    folder_name = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        folder_name
+    ).strip("-")
+
+    if not folder_name:
+
+        folder_name = "application"
+
+    output_directory = (
+        base_directory / folder_name
+    )
+
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    return output_directory
+
+
+# ============================================================
+# CV TAILORING
 # ============================================================
 
 def tailor_cv(
     job,
-    output_directory
+    output_directory=None
 ):
     """
     Generate a tailored CV for a specific job.
+
+    Returns the generated DOCX path.
     """
 
     profile = load_candidate_profile()
 
-    relevant_skills = (
-        select_relevant_skills(
-            profile,
-            job
-        )
+    # --------------------------------------------------------
+    # Select relevant content
+    # --------------------------------------------------------
+
+    relevant_skills = select_relevant_skills(
+        profile,
+        job
     )
 
-    relevant_experience = (
-        select_relevant_experience(
-            profile,
-            job
-        )
+    relevant_experience = select_relevant_experience(
+        profile,
+        job
     )
 
-    relevant_projects = (
-        select_relevant_projects(
-            profile,
-            job
-        )
+    relevant_projects = select_relevant_projects(
+        profile,
+        job
     )
 
-    tailored_summary = (
-        create_tailored_summary(
-            profile,
+    tailored_summary = build_tailored_summary(
+        profile,
+        job,
+        relevant_skills
+    )
+
+    # --------------------------------------------------------
+    # Determine output directory
+    # --------------------------------------------------------
+
+    if output_directory is None:
+
+        output_directory = create_application_directory(
             job
         )
-    )
+
+    else:
+
+        output_directory = Path(
+            output_directory
+        )
+
+        output_directory.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+    # --------------------------------------------------------
+    # Create document
+    # --------------------------------------------------------
 
     document = create_document()
-
-    # --------------------------------------------------------
-    # Header
-    # --------------------------------------------------------
 
     add_contact_header(
         document,
         profile
     )
 
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
-
     add_summary(
         document,
         tailored_summary
     )
 
-    # --------------------------------------------------------
-    # Skills
-    # --------------------------------------------------------
+    add_skills(
+        document,
+        relevant_skills
+    )
 
-    if relevant_skills:
+    add_experience(
+        document,
+        relevant_experience
+    )
 
-        add_skills(
-            document,
-            relevant_skills
-        )
-
-    # --------------------------------------------------------
-    # Experience
-    # --------------------------------------------------------
-
-    if relevant_experience:
-
-        add_experience(
-            document,
-            relevant_experience
-        )
-
-    # --------------------------------------------------------
-    # Projects
-    # --------------------------------------------------------
-
-    if relevant_projects:
-
-        add_projects(
-            document,
-            relevant_projects
-        )
-
-    # --------------------------------------------------------
-    # Education
-    # --------------------------------------------------------
+    add_projects(
+        document,
+        relevant_projects
+    )
 
     add_education(
         document,
-        profile["education"]
+        profile.get(
+            "education",
+            []
+        )
     )
 
     # --------------------------------------------------------
     # Save
     # --------------------------------------------------------
-
-    output_directory.mkdir(
-        parents=True,
-        exist_ok=True
-    )
 
     output_file = (
         output_directory
@@ -1030,6 +1657,124 @@ def tailor_cv(
 
 
 # ============================================================
+# DISPLAY TEST RESULTS
+# ============================================================
+
+def print_tailoring_results(
+    job,
+    profile
+):
+    """
+    Display what the tailoring engine selected.
+    """
+
+    relevant_skills = select_relevant_skills(
+        profile,
+        job
+    )
+
+    relevant_experience = select_relevant_experience(
+        profile,
+        job
+    )
+
+    relevant_projects = select_relevant_projects(
+        profile,
+        job
+    )
+
+    tailored_summary = build_tailored_summary(
+        profile,
+        job,
+        relevant_skills
+    )
+
+    print()
+
+    print(
+        f"Job: {job.get('title', 'Unknown')}"
+    )
+
+    if job.get("company"):
+
+        print(
+            f"Company: {job['company']}"
+        )
+
+    print()
+
+    print(
+        "Relevant skills:"
+    )
+
+    if relevant_skills:
+
+        for category, skills in relevant_skills.items():
+
+            print(
+                f"  {category}: "
+                + ", ".join(skills)
+            )
+
+    else:
+
+        print(
+            "  None"
+        )
+
+    print()
+
+    print(
+        "Selected experience:"
+    )
+
+    if relevant_experience:
+
+        for experience in relevant_experience:
+
+            print(
+                f"  {experience['title']} "
+                f"at {experience['company']}"
+            )
+
+    else:
+
+        print(
+            "  None"
+        )
+
+    print()
+
+    print(
+        "Selected projects:"
+    )
+
+    if relevant_projects:
+
+        for project in relevant_projects:
+
+            print(
+                f"  {project['name']}"
+            )
+
+    else:
+
+        print(
+            "  None"
+        )
+
+    print()
+
+    print(
+        "Tailored summary:"
+    )
+
+    print(
+        f"  {tailored_summary}"
+    )
+
+
+# ============================================================
 # TEST
 # ============================================================
 
@@ -1039,108 +1784,104 @@ if __name__ == "__main__":
     print("CV TAILOR TEST")
     print("=" * 60)
 
-    test_job = {
-
-        "title": "Backend Developer",
-
-        "description": """
-        We are looking for a backend developer with
-        Python, Flask, REST APIs, SQL and Git experience.
-
-        Experience with database design and API development
-        is an advantage.
-        """,
-
-        "location": "Nairobi, Kenya",
-    }
-
-    print()
-    print(
-        f"Job: {test_job['title']}"
-    )
-
     profile = load_candidate_profile()
 
-    relevant_skills = (
-        select_relevant_skills(
-            profile,
-            test_job
+    test_jobs = [
+
+        {
+            "title": "Backend Developer",
+
+            "company": "Test Company",
+
+            "location": "Nairobi, Kenya",
+
+            "description": """
+                We are looking for a backend developer with
+                Python, Flask, REST APIs, SQL and Git experience.
+
+                Experience developing APIs and working with
+                databases is preferred.
+            """,
+
+            "requirements": """
+                Python, Flask, REST APIs, SQL and Git.
+            """,
+        },
+
+        {
+            "title": "Frontend Developer",
+
+            "company": "Test Company",
+
+            "location": "Nairobi, Kenya",
+
+            "description": """
+                We are looking for a frontend developer with
+                HTML, CSS, JavaScript, React and Next.js.
+
+                Experience building responsive web applications
+                is preferred.
+            """,
+
+            "requirements": """
+                HTML, CSS, JavaScript, React and Next.js.
+            """,
+        },
+
+        {
+            "title": "Full Stack Developer",
+
+            "company": "Test Company",
+
+            "location": "Remote",
+
+            "description": """
+                We are looking for a full stack developer with
+                Python, Flask, REST APIs, JavaScript, React,
+                SQL and Git.
+
+                The successful candidate will work on both
+                frontend and backend web applications.
+            """,
+
+            "requirements": """
+                Python, Flask, REST APIs, JavaScript,
+                React, SQL and Git.
+            """,
+        },
+    ]
+
+    for job in test_jobs:
+
+        print_tailoring_results(
+            job,
+            profile
         )
-    )
-
-    print()
-    print("Relevant skills:")
-
-    for category, skills in relevant_skills.items():
 
         print(
-            f"  {category}: "
-            + ", ".join(skills)
+            "-" * 60
         )
 
-    relevant_experience = (
-        select_relevant_experience(
-            profile,
-            test_job
-        )
-    )
+    # --------------------------------------------------------
+    # Generate final test CV using the first test job.
+    # --------------------------------------------------------
 
-    print()
-    print(
-        "Selected experience:"
-    )
+    test_job = test_jobs[0]
 
-    for experience in relevant_experience:
-
-        print(
-            f"  {experience['title']} "
-            f"at {experience['company']}"
-        )
-
-    relevant_projects = (
-        select_relevant_projects(
-            profile,
-            test_job
-        )
-    )
-
-    print()
-    print(
-        "Selected projects:"
-    )
-
-    for project in relevant_projects:
-
-        print(
-            f"  {project['name']}"
-        )
-
-    summary = (
-        create_tailored_summary(
-            profile,
-            test_job
-        )
-    )
-
-    print()
-    print(
-        "Tailored summary:"
-    )
-
-    print(
-        f"  {summary}"
+    output_directory = (
+        APPLICATIONS_DIR
+        / "test-application"
     )
 
     output = tailor_cv(
         test_job,
-        APPLICATIONS_DIR / "test-application"
+        output_directory
     )
 
     print()
+
     print(
         f"Created tailored CV: {output}"
     )
 
     print("=" * 60)
-
-
