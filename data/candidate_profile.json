@@ -58,6 +58,8 @@
     ],
     "databases": [
       "SQLite",
+      "SQL",
+      "database",
       "SQLAlchemy",
       "Schema Design",
       "Database Implementation"
