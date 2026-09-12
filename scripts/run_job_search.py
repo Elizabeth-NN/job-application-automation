@@ -5,17 +5,129 @@ Main job search pipeline.
 Collects jobs from all configured sources,
 matches them against the user's profile,
 saves them to the Excel tracker,
+generates tailored CVs for APPLY jobs,
 and displays ranked results.
 """
+
+from pathlib import Path
 
 from scripts.job_collector import collect_all_jobs
 from scripts.job_matcher import calculate_match
 from scripts.job_tracker import save_job
+from scripts.cv_tailor import tailor_cv
 
+
+# ============================================================
+# APPLICATIONS DIRECTORY
+# ============================================================
+
+APPLICATIONS_DIR = Path("applications")
+
+
+# ============================================================
+# APPLICATION FOLDER
+# ============================================================
+
+def create_application_directory(job):
+    """
+    Create a unique directory for a job application.
+
+    Example:
+
+        applications/
+            backend-developer-two-max-group/
+    """
+
+    title = job.get(
+        "title",
+        "unknown-job"
+    )
+
+    company = job.get(
+        "company",
+        "unknown-company"
+    )
+
+    folder_name = (
+        f"{company}-{title}"
+        .lower()
+    )
+
+    # Replace anything unsafe for a filename.
+    import re
+
+    folder_name = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        folder_name
+    )
+
+    folder_name = folder_name.strip("-")
+
+    # Limit folder name length.
+    folder_name = folder_name[:100]
+
+    output_directory = (
+        APPLICATIONS_DIR
+        / folder_name
+    )
+
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    return output_directory
+
+
+# ============================================================
+# GENERATE TAILORED CV
+# ============================================================
+
+def generate_tailored_cv(job, match):
+    """
+    Generate a tailored CV only for jobs recommended
+    as APPLY.
+    """
+
+    if match.get(
+        "recommendation"
+    ) != "APPLY":
+
+        return None
+
+    try:
+
+        output_directory = (
+            create_application_directory(
+                job
+            )
+        )
+
+        cv_file = tailor_cv(
+            job,
+            output_directory
+        )
+
+        return cv_file
+
+    except Exception as error:
+
+        print(
+            f"   ⚠ CV tailoring failed: {error}"
+        )
+
+        return None
+
+
+# ============================================================
+# MAIN PIPELINE
+# ============================================================
 
 def run_job_search():
     """
-    Collect, match, save, sort, and display jobs.
+    Collect, match, save, tailor, sort,
+    and display jobs.
     """
 
     print("=" * 60)
@@ -47,23 +159,31 @@ def run_job_search():
         start=1
     ):
 
+        title = job.get(
+            "title",
+            ""
+        )
+
+        company = job.get(
+            "company",
+            "Unknown company"
+        )
+
         print(
             f"[{index}/{len(jobs)}] "
             f"Processing: "
-            f"{job.get('title', 'Unknown title')}"
+            f"{title}"
+        )
+
+        print(
+            f"   Company: {company}"
         )
 
         try:
 
             # ------------------------------------------------
-            # Job details have already been extracted by the
-            # individual source scraper.
+            # Job description
             # ------------------------------------------------
-
-            title = job.get(
-                "title",
-                ""
-            )
 
             description = job.get(
                 "description",
@@ -93,6 +213,25 @@ def run_job_search():
             )
 
             # ------------------------------------------------
+            # Display score
+            # ------------------------------------------------
+
+            print(
+                f"   Score: "
+                f"{match.get('score', 0)}%"
+            )
+
+            print(
+                f"   Category: "
+                f"{match.get('category', '')}"
+            )
+
+            print(
+                f"   Recommendation: "
+                f"{match.get('recommendation', '')}"
+            )
+
+            # ------------------------------------------------
             # Save to Excel tracker
             # ------------------------------------------------
 
@@ -113,11 +252,39 @@ def run_job_search():
                     "   → Already in tracker"
                 )
 
+            # ------------------------------------------------
+            # Generate tailored CV
+            # ------------------------------------------------
+
+            if match.get(
+                "recommendation"
+            ) == "APPLY":
+
+                print(
+                    "   → Generating tailored CV..."
+                )
+
+                cv_file = generate_tailored_cv(
+                    job,
+                    match
+                )
+
+                if cv_file:
+
+                    print(
+                        f"   ✓ Tailored CV: "
+                        f"{cv_file}"
+                    )
+
+            print()
+
         except Exception as error:
 
             print(
                 f"   ERROR: {error}"
             )
+
+            print()
 
     # ========================================================
     # 3. SORT RESULTS BY MATCH SCORE
@@ -221,6 +388,21 @@ def run_job_search():
             )
 
         # ------------------------------------------------
+        # Transferable skills
+        # ------------------------------------------------
+
+        if job.get(
+            "transferable_skills"
+        ):
+
+            print(
+                "   Transferable skills: "
+                + ", ".join(
+                    job["transferable_skills"]
+                )
+            )
+
+        # ------------------------------------------------
         # Missing skills
         # ------------------------------------------------
 
@@ -233,6 +415,32 @@ def run_job_search():
                 + ", ".join(
                     job["missing_skills"]
                 )
+            )
+
+        # ------------------------------------------------
+        # Experience
+        # ------------------------------------------------
+
+        if job.get(
+            "experience_level"
+        ):
+
+            print(
+                f"   Experience: "
+                f"{job['experience_level']}"
+            )
+
+        # ------------------------------------------------
+        # Years required
+        # ------------------------------------------------
+
+        if job.get(
+            "years_required"
+        ) is not None:
+
+            print(
+                f"   Years required: "
+                f"{job['years_required']}"
             )
 
         # ------------------------------------------------
