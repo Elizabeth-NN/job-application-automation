@@ -15,24 +15,56 @@ The matcher considers:
     8. Education
     9. Technology stack compatibility
 
+The candidate profile is loaded from:
+
+    data/candidate_profile.json
+
 The goal is to estimate whether a job is realistically worth
-applying for, rather than simply counting matching keywords.
+applying for, rather than simply counting keywords.
 """
 
+import json
 import re
+from pathlib import Path
 
 
 # ============================================================
-# ELIZABETH'S JOB PROFILE
+# CANDIDATE PROFILE
 # ============================================================
 
-JOB_PROFILE = {
+PROFILE_FILE = Path("data/candidate_profile.json")
 
-    # --------------------------------------------------------
-    # Target roles
-    # --------------------------------------------------------
 
-    "target_roles": [
+def load_candidate_profile():
+    """
+    Load Elizabeth's candidate profile from JSON.
+    """
+
+    if not PROFILE_FILE.exists():
+        raise FileNotFoundError(
+            f"Candidate profile not found: {PROFILE_FILE}"
+        )
+
+    with open(
+        PROFILE_FILE,
+        "r",
+        encoding="utf-8"
+    ) as file:
+
+        return json.load(file)
+
+
+def get_job_profile():
+    """
+    Build the job-matching profile from candidate_profile.json.
+
+    The candidate JSON remains the single source of truth for
+    Elizabeth's skills and education.
+    """
+
+    profile = load_candidate_profile()
+
+    target_roles = [
         "python developer",
         "backend developer",
         "backend engineer",
@@ -41,74 +73,47 @@ JOB_PROFILE = {
         "full stack developer",
         "fullstack developer",
         "web developer",
-        "web developer",
         "frontend developer",
         "frontend engineer",
-    ],
+    ]
 
-    # --------------------------------------------------------
-    # Core skills
-    # --------------------------------------------------------
+    core_skills = []
 
-    "core_skills": [
-        "python",
-        "flask",
-        "rest api",
-        "api development",
-        "database design",
-        "sql",
-        "git",
-        "react",
-        "javascript",
-        "html",
-        "css",
-        "next.js",
-        "tailwind css",
-    ],
+    for skills in profile.get(
+        "technical_skills",
+        {}
+    ).values():
 
-    # --------------------------------------------------------
-    # Transferable / related technologies
-    #
-    # These are technologies that are close enough to
-    # Elizabeth's existing skills that they should not be
-    # treated as complete technology mismatches.
-    # --------------------------------------------------------
+        core_skills.extend(
+            skill.lower()
+            for skill in skills
+        )
 
-    "transferable_skills": [
-        "postgresql",
-        "mysql",
-        "mongodb",
-        "django",
-        "fastapi",
-        "typescript",
-        "node.js",
-        "node",
-        "github",
-        "docker",
-    ],
+    return {
+        "target_roles": list(
+            dict.fromkeys(target_roles)
+        ),
 
-    # --------------------------------------------------------
-    # Locations
-    # --------------------------------------------------------
+        "core_skills": list(
+            dict.fromkeys(core_skills)
+        ),
 
-    "locations": [
-        "nairobi",
-        "kenya",
-        "remote",
-        "hybrid",
-    ],
+        "locations": [
+            "nairobi",
+            "kenya",
+            "remote",
+            "hybrid",
+        ],
 
-    # --------------------------------------------------------
-    # Education
-    # --------------------------------------------------------
-
-    "education": [
-        "software engineering",
-        "computer science",
-        "information technology",
-        "information systems",
-    ],
-}
+        "education": [
+            education["qualification"].lower()
+            for education in profile.get(
+                "education",
+                []
+            )
+            if education.get("qualification")
+        ],
+    }
 
 
 # ============================================================
@@ -136,6 +141,8 @@ ALL_SKILLS = [
     "database",
     "mongodb",
     "oracle",
+    "sqlite",
+    "sqlalchemy",
 
     # Frontend
     "react",
@@ -169,6 +176,25 @@ ALL_SKILLS = [
     ".net",
     "c#",
 ]
+
+
+# ============================================================
+# TRANSFERABLE SKILLS
+# ============================================================
+
+TRANSFERABLE_SKILLS = {
+
+    "postgresql",
+    "mysql",
+    "mongodb",
+    "django",
+    "fastapi",
+    "typescript",
+    "node.js",
+    "node",
+    "github",
+    "docker",
+}
 
 
 # ============================================================
@@ -422,11 +448,13 @@ def find_role_matches(title):
     Find target roles appearing in the job title.
     """
 
+    job_profile = get_job_profile()
+
     matches = []
 
     normalized_title = normalize(title)
 
-    for role in JOB_PROFILE["target_roles"]:
+    for role in job_profile["target_roles"]:
 
         if contains_term(
             normalized_title,
@@ -449,9 +477,11 @@ def find_matching_skills(full_text):
     Find core skills Elizabeth has that appear in the job.
     """
 
+    job_profile = get_job_profile()
+
     matching_skills = []
 
-    for skill in JOB_PROFILE["core_skills"]:
+    for skill in job_profile["core_skills"]:
 
         if contains_term(
             full_text,
@@ -477,7 +507,7 @@ def find_transferable_skills(full_text):
 
     matches = []
 
-    for skill in JOB_PROFILE["transferable_skills"]:
+    for skill in TRANSFERABLE_SKILLS:
 
         if contains_term(
             full_text,
@@ -512,10 +542,18 @@ def find_job_skills(full_text):
             job_skills.append(skill)
 
     # Remove aliases where appropriate.
-    if "react.js" in job_skills and "react" in job_skills:
+    if (
+        "react.js" in job_skills
+        and "react" in job_skills
+    ):
+
         job_skills.remove("react.js")
 
-    if "node" in job_skills and "node.js" in job_skills:
+    if (
+        "node" in job_skills
+        and "node.js" in job_skills
+    ):
+
         job_skills.remove("node")
 
     return list(
@@ -544,9 +582,9 @@ def find_outside_technologies(full_text):
             technology
         ):
 
-            # Don't treat a technology as "outside" if it
-            # is explicitly considered transferable.
-            if technology in JOB_PROFILE["transferable_skills"]:
+            # Don't treat transferable technologies
+            # as completely outside the stack.
+            if technology in TRANSFERABLE_SKILLS:
                 continue
 
             outside.append(display_name)
@@ -566,13 +604,15 @@ def find_missing_skills(full_text):
     listed as core or transferable skills.
     """
 
+    job_profile = get_job_profile()
+
     job_skills = find_job_skills(
         full_text
     )
 
     known_skills = set(
-        JOB_PROFILE["core_skills"]
-        + JOB_PROFILE["transferable_skills"]
+        job_profile["core_skills"]
+        + list(TRANSFERABLE_SKILLS)
     )
 
     missing = []
@@ -662,8 +702,6 @@ def detect_experience_level(
 
     # --------------------------------------------------------
     # Description-level indicators.
-    #
-    # These are deliberately more conservative.
     # --------------------------------------------------------
 
     description = normalize(
@@ -733,7 +771,6 @@ def find_required_experience(full_text):
         r"(\d+)\+?\s+years?\s+experience",
 
         r"(\d+)\+?\s+years?\s+in\s+(?:software|web|backend|frontend|development|engineering)",
-
     ]
 
     normalized = normalize(
@@ -852,10 +889,6 @@ def calculate_skill_score(
     Technical skill score: 35 points.
 
     Core skills are worth more than transferable skills.
-
-    This avoids punishing Elizabeth heavily for technologies
-    such as PostgreSQL when she already has SQL/database
-    experience.
     """
 
     if not job_skills:
@@ -943,18 +976,18 @@ def find_location_matches(full_text):
     Find matching preferred locations.
     """
 
+    job_profile = get_job_profile()
+
     matches = []
 
-    for location in JOB_PROFILE["locations"]:
+    for location in job_profile["locations"]:
 
         if contains_term(
             full_text,
             location
         ):
 
-            matches.append(
-                location
-            )
+            matches.append(location)
 
     return list(
         dict.fromkeys(matches)
@@ -984,26 +1017,25 @@ def calculate_education_score(full_text):
     Education: 5 points.
     """
 
+    job_profile = get_job_profile()
+
     education_keywords = [
 
         "computer science",
-
         "software engineering",
-
         "information technology",
-
         "information systems",
-
         "web development",
-
         "bachelor's degree",
-
         "bachelor degree",
-
         "bachelor",
-
         "degree",
     ]
+
+    # Also include qualifications from the candidate profile.
+    education_keywords.extend(
+        job_profile["education"]
+    )
 
     for keyword in education_keywords:
 
@@ -1062,7 +1094,7 @@ def calculate_match(
     Scoring:
 
         Role relevance:       30 points
-        Technical skills:    35 points
+        Technical skills:     35 points
         Experience:           15 points
         Location:             10 points
         Education:             5 points
@@ -1279,10 +1311,6 @@ def calculate_match(
     # 8. ROLE / TECHNOLOGY ALIGNMENT
     # ========================================================
 
-    # A software role without a target role can still be
-    # relevant, but should not receive the same confidence
-    # as a directly matching role.
-
     if not role_matches:
 
         warnings.append(
@@ -1400,20 +1428,13 @@ def calculate_match(
 
     return {
 
-        # ----------------------------------------------------
-        # Final result
-        # ----------------------------------------------------
-
         "score": score,
 
         "category": category,
 
         "recommendation": recommendation,
 
-        # ----------------------------------------------------
         # Score breakdown
-        # ----------------------------------------------------
-
         "role_score": role_score,
 
         "skill_score": skill_score,
@@ -1426,10 +1447,7 @@ def calculate_match(
 
         "technology_score": technology_score,
 
-        # ----------------------------------------------------
         # Matching details
-        # ----------------------------------------------------
-
         "role_matches": role_matches,
 
         "matching_skills": matching_skills,
@@ -1454,10 +1472,7 @@ def calculate_match(
 
         "software_role": software_role,
 
-        # ----------------------------------------------------
         # Warnings
-        # ----------------------------------------------------
-
         "warnings": list(
             dict.fromkeys(
                 warnings
