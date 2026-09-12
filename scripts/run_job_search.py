@@ -15,7 +15,7 @@ from scripts.job_collector import collect_all_jobs
 from scripts.job_matcher import calculate_match
 from scripts.job_tracker import save_job
 from scripts.cv_tailor import tailor_cv
-from scripts.cover_letter import generate_cover_letter
+from scripts.cover_letter import save_cover_letter
 
 
 APPLICATIONS_DIR = Path("applications")
@@ -86,7 +86,7 @@ def generate_application_documents(job, match):
         "   → Generating cover letter..."
     )
 
-    cover_letter_file = generate_cover_letter(
+    cover_letter_file = save_cover_letter(
         job,
         match,
         application_directory

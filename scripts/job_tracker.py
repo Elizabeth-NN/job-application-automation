@@ -63,6 +63,36 @@ POOR_FILL = PatternFill(
 )
 
 
+# ==========================================================
+# HELPERS
+# ==========================================================
+
+def _as_list(value):
+    """Convert a value into a list of strings."""
+
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [value] if value else []
+
+    return list(value)
+
+
+def _join_values(values, separator=", "):
+    """Safely convert values into a string."""
+
+    return separator.join(
+        str(value)
+        for value in _as_list(values)
+        if value
+    )
+
+
+# ==========================================================
+# TRACKER CREATION
+# ==========================================================
+
 def create_tracker():
     """Create the Excel tracker if it does not exist."""
 
@@ -167,13 +197,12 @@ def create_tracker():
         14: 70,
         15: 20,
         16: 18,
-        17: 20,
-        18: 20,
+        17: 35,
+        18: 35,
         19: 40,
     }
 
     for column, width in widths.items():
-
         sheet.column_dimensions[
             get_column_letter(column)
         ].width = width
@@ -183,9 +212,7 @@ def create_tracker():
     # ======================================================
 
     for row in sheet.iter_rows():
-
         for cell in row:
-
             cell.alignment = Alignment(
                 vertical="top",
                 wrap_text=True
@@ -195,16 +222,30 @@ def create_tracker():
         TRACKER_FILE
     )
 
+    workbook.close()
+
     print(
         f"Created tracker: {TRACKER_FILE}"
     )
 
 
-def job_exists(url):
-    """Check whether a job already exists."""
+# ==========================================================
+# FIND JOB
+# ==========================================================
 
-    if not TRACKER_FILE.exists():
-        return False
+def find_job_row(url):
+    """
+    Find a job row using its URL.
+
+    Returns:
+        Row number if found.
+        None if not found.
+    """
+
+    if not url:
+        return None
+
+    create_tracker()
 
     workbook = load_workbook(
         TRACKER_FILE,
@@ -213,24 +254,104 @@ def job_exists(url):
 
     sheet = workbook["Jobs"]
 
-    for row in sheet.iter_rows(
-        min_row=2,
-        values_only=True
-    ):
+    try:
+        for row in sheet.iter_rows(
+            min_row=2,
+            values_only=True
+        ):
+            # URL is column N = index 13
+            existing_url = row[13]
 
-        # URL is column N
-        existing_url = row[13]
+            if existing_url == url:
+                return row[0] and sheet._current_row or None
 
-        if existing_url == url:
+    finally:
+        workbook.close()
 
-            workbook.close()
+    return None
 
-            return True
 
-    workbook.close()
+# ==========================================================
+# JOB EXISTS
+# ==========================================================
+
+def job_exists(url):
+    """Check whether a job already exists."""
+
+    if not url:
+        return False
+
+    create_tracker()
+
+    workbook = load_workbook(
+        TRACKER_FILE,
+        read_only=True
+    )
+
+    sheet = workbook["Jobs"]
+
+    try:
+        for row in sheet.iter_rows(
+            min_row=2,
+            values_only=True
+        ):
+            # URL is column N
+            existing_url = row[13]
+
+            if existing_url == url:
+                return True
+
+    finally:
+        workbook.close()
 
     return False
 
+
+# ==========================================================
+# FIND ROW NUMBER
+# ==========================================================
+
+def get_job_row(url):
+    """
+    Return the actual Excel row number for a job URL.
+
+    Returns None if the job does not exist.
+    """
+
+    if not url:
+        return None
+
+    create_tracker()
+
+    workbook = load_workbook(
+        TRACKER_FILE,
+        read_only=True
+    )
+
+    sheet = workbook["Jobs"]
+
+    try:
+        for row_number in range(
+            2,
+            sheet.max_row + 1
+        ):
+            existing_url = sheet.cell(
+                row=row_number,
+                column=14
+            ).value
+
+            if existing_url == url:
+                return row_number
+
+    finally:
+        workbook.close()
+
+    return None
+
+
+# ==========================================================
+# CATEGORY FORMATTING
+# ==========================================================
 
 def apply_category_formatting(sheet, row_number):
     """Apply color formatting based on match category."""
@@ -263,20 +384,81 @@ def apply_category_formatting(sheet, row_number):
         fill = POOR_FILL
 
     if fill:
-
         for column in range(
             1,
             len(HEADERS) + 1
         ):
-
             sheet.cell(
                 row=row_number,
                 column=column
             ).fill = fill
 
 
+# ==========================================================
+# FORMAT ROW
+# ==========================================================
+
+def format_job_row(sheet, row_number):
+    """Apply formatting to a job row."""
+
+    for column in range(
+        1,
+        len(HEADERS) + 1
+    ):
+        cell = sheet.cell(
+            row=row_number,
+            column=column
+        )
+
+        cell.alignment = Alignment(
+            vertical="top",
+            wrap_text=True
+        )
+
+    # Category colors
+    apply_category_formatting(
+        sheet,
+        row_number
+    )
+
+    # Score alignment
+    score_cell = sheet.cell(
+        row=row_number,
+        column=5
+    )
+
+    score_cell.alignment = Alignment(
+        horizontal="center",
+        vertical="top"
+    )
+
+    # URL hyperlink
+    url_cell = sheet.cell(
+        row=row_number,
+        column=14
+    )
+
+    url = url_cell.value
+
+    if url:
+        url_cell.hyperlink = url
+        url_cell.style = "Hyperlink"
+
+
+# ==========================================================
+# SAVE NEW JOB
+# ==========================================================
+
 def save_job(job, match_result):
-    """Save a matched job to the Excel tracker."""
+    """
+    Save a matched job to the Excel tracker.
+
+    If the job already exists, it is not duplicated.
+
+    Returns:
+        True  -> new job was added
+        False -> job already existed
+    """
 
     create_tracker()
 
@@ -361,20 +543,21 @@ def save_job(job, match_result):
             ""
         ),
 
-        ", ".join(
+        _join_values(
             role_matches
         ),
 
-        ", ".join(
+        _join_values(
             matching_skills
         ),
 
-        ", ".join(
+        _join_values(
             missing_skills
         ),
 
-        " | ".join(
-            warnings
+        _join_values(
+            warnings,
+            separator=" | "
         ),
 
         job.get(
@@ -400,35 +583,121 @@ def save_job(job, match_result):
         "",
     ])
 
-    # ======================================================
-    # GET NEW ROW
-    # ======================================================
-
     row_number = sheet.max_row
 
-    # ======================================================
-    # MAKE URL CLICKABLE
-    # ======================================================
-
-    url_cell = sheet.cell(
-        row=row_number,
-        column=14
+    format_job_row(
+        sheet,
+        row_number
     )
 
-    if url:
+    workbook.save(
+        TRACKER_FILE
+    )
 
-        url_cell.hyperlink = url
-        url_cell.style = "Hyperlink"
+    workbook.close()
+
+    return True
+
+
+# ==========================================================
+# UPDATE APPLICATION DOCUMENTS
+# ==========================================================
+
+def update_application_documents(
+    url,
+    cv_path=None,
+    cover_letter_path=None
+):
+    """
+    Update CV and cover-letter paths for an existing job.
+
+    This is intentionally separate from save_job() because
+    document generation happens after the job has already
+    been saved to the tracker.
+
+    Args:
+        url:
+            Job URL used to locate the tracker row.
+
+        cv_path:
+            Path to the generated tailored CV.
+
+        cover_letter_path:
+            Path to the generated cover letter.
+
+    Returns:
+        True if the tracker was updated.
+        False if the job could not be found.
+    """
+
+    if not url:
+        return False
+
+    create_tracker()
+
+    row_number = get_job_row(
+        url
+    )
+
+    if row_number is None:
+        return False
+
+    workbook = load_workbook(
+        TRACKER_FILE
+    )
+
+    sheet = workbook["Jobs"]
 
     # ======================================================
-    # ROW FORMATTING
+    # CV PATH
     # ======================================================
 
-    for column in range(
-        1,
-        len(HEADERS) + 1
-    ):
+    if cv_path:
+        sheet.cell(
+            row=row_number,
+            column=17
+        ).value = str(
+            Path(cv_path)
+        )
 
+    # ======================================================
+    # COVER LETTER PATH
+    # ======================================================
+
+    if cover_letter_path:
+        sheet.cell(
+            row=row_number,
+            column=18
+        ).value = str(
+            Path(cover_letter_path)
+        )
+
+    # ======================================================
+    # APPLICATION STATUS
+    # ======================================================
+
+    cv_exists = bool(cv_path)
+    cover_letter_exists = bool(
+        cover_letter_path
+    )
+
+    if cv_exists and cover_letter_exists:
+        sheet.cell(
+            row=row_number,
+            column=15
+        ).value = "To Apply"
+
+    elif cv_exists or cover_letter_exists:
+        sheet.cell(
+            row=row_number,
+            column=15
+        ).value = "To Apply"
+
+    # ======================================================
+    # FORMAT DOCUMENT CELLS
+    # ======================================================
+
+    for column in (17, 18):
         cell = sheet.cell(
             row=row_number,
             column=column
@@ -439,32 +708,94 @@ def save_job(job, match_result):
             wrap_text=True
         )
 
-    # ======================================================
-    # CATEGORY COLOR
-    # ======================================================
-
-    apply_category_formatting(
-        sheet,
-        row_number
+    workbook.save(
+        TRACKER_FILE
     )
 
-    # ======================================================
-    # SCORE FORMATTING
-    # ======================================================
+    workbook.close()
 
-    score_cell = sheet.cell(
+    return True
+
+
+# ==========================================================
+# UPDATE NOTES
+# ==========================================================
+
+def update_job_notes(url, notes):
+    """Update the Notes column for an existing job."""
+
+    if not url:
+        return False
+
+    create_tracker()
+
+    row_number = get_job_row(
+        url
+    )
+
+    if row_number is None:
+        return False
+
+    workbook = load_workbook(
+        TRACKER_FILE
+    )
+
+    sheet = workbook["Jobs"]
+
+    sheet.cell(
         row=row_number,
-        column=5
+        column=19
+    ).value = notes or ""
+
+    sheet.cell(
+        row=row_number,
+        column=19
+    ).alignment = Alignment(
+        vertical="top",
+        wrap_text=True
     )
 
-    score_cell.alignment = Alignment(
-        horizontal="center",
-        vertical="top"
+    workbook.save(
+        TRACKER_FILE
     )
 
-    # ======================================================
-    # SAVE
-    # ======================================================
+    workbook.close()
+
+    return True
+
+
+# ==========================================================
+# UPDATE APPLICATION STATUS
+# ==========================================================
+
+def update_application_status(
+    url,
+    status
+):
+    """Update the application status for an existing job."""
+
+    if not url:
+        return False
+
+    create_tracker()
+
+    row_number = get_job_row(
+        url
+    )
+
+    if row_number is None:
+        return False
+
+    workbook = load_workbook(
+        TRACKER_FILE
+    )
+
+    sheet = workbook["Jobs"]
+
+    sheet.cell(
+        row=row_number,
+        column=15
+    ).value = status
 
     workbook.save(
         TRACKER_FILE
