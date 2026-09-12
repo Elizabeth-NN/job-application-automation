@@ -1,17 +1,16 @@
+
 """
 Cover letter generator.
 
-Generates a tailored cover letter for each job based on:
+Generates a tailored cover letter for each job using:
 - Candidate profile
 - Job title
 - Company
-- Job description
 - Matching skills
 - Relevant experience
 - Relevant projects
 
-Output:
-    applications/<job-folder>/cover_letter.docx
+The generated letter is saved as a Word document.
 """
 
 import json
@@ -24,7 +23,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 # ============================================================
-# PATHS
+# CONFIGURATION
 # ============================================================
 
 PROFILE_FILE = Path("data/candidate_profile.json")
@@ -36,9 +35,7 @@ APPLICATIONS_DIR = Path("applications")
 # ============================================================
 
 def load_candidate_profile():
-    """
-    Load the candidate profile from JSON.
-    """
+    """Load the candidate profile from JSON."""
 
     if not PROFILE_FILE.exists():
         raise FileNotFoundError(
@@ -55,253 +52,107 @@ def load_candidate_profile():
 
 
 # ============================================================
-# TEXT UTILITIES
+# TEXT HELPERS
 # ============================================================
 
 def normalize_text(text):
-    """
-    Normalize text for keyword matching.
-    """
+    """Normalize text for keyword matching."""
 
     if not text:
         return ""
 
-    return re.sub(
-        r"[^a-z0-9+#.]",
+    text = str(text).lower()
+
+    text = re.sub(
+        r"[^a-z0-9+#.\s]",
         " ",
-        str(text).lower()
+        text
     )
+
+    return re.sub(
+        r"\s+",
+        " ",
+        text
+    ).strip()
+
+
+def clean_sentence(text):
+    """Clean a sentence extracted from profile data."""
+
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    # Remove accidental leading punctuation
+    text = re.sub(
+        r"^[\s\-•]+",
+        "",
+        text
+    )
+
+    # Normalize whitespace
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    # Fix common lowercase sentence starts
+    if text:
+        text = text[0].upper() + text[1:]
+
+    # Ensure punctuation
+    if text[-1] not in ".!?":
+        text += "."
+
+    return text
 
 
 def get_job_text(job):
-    """
-    Combine all useful job information into one string.
-    """
+    """Return normalized job text."""
 
     return normalize_text(
         f"""
-        {job.get("title", "")}
-        {job.get("company", "")}
-        {job.get("description", "")}
-        {job.get("requirements", "")}
-        {job.get("skills", "")}
-        {job.get("responsibilities", "")}
+        {job.get('title', '')}
+        {job.get('description', '')}
+        {job.get('requirements', '')}
+        {job.get('skills', '')}
         """
     )
 
 
-def get_candidate_skills(profile):
-    """
-    Return all candidate technical skills as a flat list.
-    """
-
-    skills = []
-
-    for skill_list in profile.get(
-        "technical_skills",
-        {}
-    ).values():
-
-        skills.extend(skill_list)
-
-    return skills
-
-
-def find_matching_skills(profile, job):
-    """
-    Find candidate skills appearing in the job description.
-    """
-
-    job_text = get_job_text(job)
-
-    matches = []
-
-    for skill in get_candidate_skills(profile):
-
-        normalized_skill = normalize_text(skill)
-
-        if not normalized_skill:
-            continue
-
-        if normalized_skill in job_text:
-
-            matches.append(skill)
-
-    # Remove duplicates while preserving order
-    return list(
-        dict.fromkeys(matches)
-    )
-
-
-def find_relevant_experience(profile, job):
-    """
-    Find the candidate's most relevant experience.
-    """
-
-    job_text = get_job_text(job)
-
-    selected = []
-
-    # Important technical keywords
-    technical_keywords = [
-        "python",
-        "flask",
-        "api",
-        "rest",
-        "backend",
-        "frontend",
-        "react",
-        "javascript",
-        "database",
-        "sql",
-        "software",
-        "web",
-        "development",
-        "developer"
-    ]
-
-    for experience in profile.get(
-        "experience",
-        []
-    ):
-
-        experience_text = normalize_text(
-            f"""
-            {experience.get("title", "")}
-            {experience.get("company", "")}
-            {' '.join(
-                experience.get(
-                    "responsibilities",
-                    []
-                )
-            )}
-            """
-        )
-
-        # ----------------------------------------------------
-        # Strong software-development experience
-        # ----------------------------------------------------
-
-        if any(
-            keyword in experience_text
-            for keyword in technical_keywords
-        ):
-
-            selected.append(experience)
-
-            continue
-
-        # ----------------------------------------------------
-        # General keyword overlap
-        # ----------------------------------------------------
-
-        job_words = set(
-            job_text.split()
-        )
-
-        experience_words = set(
-            experience_text.split()
-        )
-
-        overlap = job_words.intersection(
-            experience_words
-        )
-
-        if len(overlap) >= 2:
-
-            selected.append(
-                experience
-            )
-
-    return selected
-
-
-def find_relevant_projects(profile, job):
-    """
-    Find projects relevant to the job.
-    """
-
-    job_text = get_job_text(job)
-
-    scored_projects = []
-
-    for project in profile.get(
-        "projects",
-        []
-    ):
-
-        project_text = normalize_text(
-            f"""
-            {project.get("name", "")}
-            {project.get("description", "")}
-            {project.get("role", "")}
-            {' '.join(
-                project.get(
-                    "responsibilities",
-                    []
-                )
-            )}
-            {' '.join(
-                project.get(
-                    "technologies",
-                    []
-                )
-            )}
-            """
-        )
-
-        job_words = set(
-            job_text.split()
-        )
-
-        project_words = set(
-            project_text.split()
-        )
-
-        overlap = job_words.intersection(
-            project_words
-        )
-
-        scored_projects.append(
-            (
-                len(overlap),
-                project
-            )
-        )
-
-    # Highest relevance first
-    scored_projects.sort(
-        key=lambda item: item[0],
-        reverse=True
-    )
-
-    # Keep up to three projects
-    selected = [
-        project
-        for score, project
-        in scored_projects[:3]
-    ]
-
-    return selected
-
-
 # ============================================================
-# ROLE TYPE
+# ROLE DETECTION
 # ============================================================
 
-def determine_role_type(job_title):
+def detect_role_type(job):
     """
-    Determine the general type of software role.
+    Detect the broad role category.
+
+    Returns:
+        backend
+        frontend
+        full_stack
+        software
+        other
     """
 
     title = normalize_text(
-        job_title
+        job.get("title", "")
     )
+
+    if (
+        "full stack" in title
+        or "fullstack" in title
+    ):
+        return "full_stack"
 
     if (
         "backend" in title
         or "back end" in title
         or "python developer" in title
+        or "flask developer" in title
     ):
         return "backend"
 
@@ -314,12 +165,6 @@ def determine_role_type(job_title):
         return "frontend"
 
     if (
-        "full stack" in title
-        or "fullstack" in title
-    ):
-        return "fullstack"
-
-    if (
         "software developer" in title
         or "software engineer" in title
         or "developer" in title
@@ -327,184 +172,580 @@ def determine_role_type(job_title):
     ):
         return "software"
 
-    return "software"
+    return "other"
 
 
 # ============================================================
 # SKILL SELECTION
 # ============================================================
 
-def select_top_skills(
-    matching_skills,
-    max_skills=6
+def select_relevant_skills(
+    profile,
+    job,
+    match=None
 ):
     """
-    Select the strongest skills to mention in the letter.
+    Select candidate skills relevant to the job.
+
+    If matcher results are available, matching skills are
+    prioritized.
     """
 
-    priority = [
-        "Python",
-        "Flask",
-        "Flask-RESTful",
-        "REST APIs",
-        "React.js",
-        "React",
-        "JavaScript",
-        "SQL",
-        "Database Design",
-        "Schema Design",
-        "Database Implementation",
-        "Git",
-        "GitHub",
-        "HTML",
-        "CSS",
-        "Next.js"
+    job_text = get_job_text(job)
+
+    selected = {}
+
+    technical_skills = profile.get(
+        "technical_skills",
+        {}
+    )
+
+    # --------------------------------------------------------
+    # First use matcher results when available
+    # --------------------------------------------------------
+
+    matching_skills = []
+
+    if match:
+        matching_skills = match.get(
+            "matching_skills",
+            []
+        )
+
+    normalized_matches = {
+        normalize_text(skill)
+        for skill in matching_skills
+    }
+
+    # --------------------------------------------------------
+    # Check candidate profile skills
+    # --------------------------------------------------------
+
+    for category, skills in technical_skills.items():
+
+        relevant = []
+
+        for skill in skills:
+
+            normalized_skill = normalize_text(
+                skill
+            )
+
+            if (
+                normalized_skill in normalized_matches
+                or normalized_skill in job_text
+            ):
+                relevant.append(skill)
+
+        if relevant:
+            selected[category] = relevant
+
+    return selected
+
+
+def flatten_skills(skills):
+    """Flatten categorized skills into one list."""
+
+    result = []
+
+    for skill_list in skills.values():
+
+        for skill in skill_list:
+
+            if skill not in result:
+                result.append(skill)
+
+    return result
+
+
+# ============================================================
+# EXPERIENCE SELECTION
+# ============================================================
+
+def experience_relevance_score(
+    experience,
+    job,
+    role_type
+):
+    """Calculate relevance of an experience item."""
+
+    job_text = get_job_text(job)
+
+    experience_text = normalize_text(
+        f"""
+        {experience.get('title', '')}
+        {experience.get('company', '')}
+        {' '.join(experience.get('responsibilities', []))}
+        """
+    )
+
+    score = 0
+
+    # --------------------------------------------------------
+    # Direct keyword overlap
+    # --------------------------------------------------------
+
+    job_words = set(job_text.split())
+    experience_words = set(
+        experience_text.split()
+    )
+
+    overlap = job_words.intersection(
+        experience_words
+    )
+
+    score += min(
+        len(overlap) * 2,
+        10
+    )
+
+    # --------------------------------------------------------
+    # Software experience
+    # --------------------------------------------------------
+
+    if (
+        "software" in experience_text
+        or "developer" in experience_text
+        or "backend" in experience_text
+        or "api" in experience_text
+        or "programming" in experience_text
+    ):
+        score += 10
+
+    # --------------------------------------------------------
+    # Backend relevance
+    # --------------------------------------------------------
+
+    if role_type == "backend":
+
+        if (
+            "python" in experience_text
+            or "flask" in experience_text
+            or "api" in experience_text
+            or "backend" in experience_text
+            or "database" in experience_text
+        ):
+            score += 10
+
+    # --------------------------------------------------------
+    # Frontend relevance
+    # --------------------------------------------------------
+
+    if role_type == "frontend":
+
+        if (
+            "react" in experience_text
+            or "javascript" in experience_text
+            or "frontend" in experience_text
+            or "web" in experience_text
+        ):
+            score += 10
+
+    # --------------------------------------------------------
+    # Full stack relevance
+    # --------------------------------------------------------
+
+    if role_type == "full_stack":
+
+        backend = (
+            "python" in experience_text
+            or "flask" in experience_text
+            or "backend" in experience_text
+            or "api" in experience_text
+        )
+
+        frontend = (
+            "react" in experience_text
+            or "javascript" in experience_text
+            or "frontend" in experience_text
+        )
+
+        if backend:
+            score += 7
+
+        if frontend:
+            score += 7
+
+    return score
+
+
+def select_relevant_experience(
+    profile,
+    job
+):
+    """Select the most relevant work experience."""
+
+    role_type = detect_role_type(job)
+
+    experience = profile.get(
+        "experience",
+        []
+    )
+
+    scored = []
+
+    for item in experience:
+
+        score = experience_relevance_score(
+            item,
+            job,
+            role_type
+        )
+
+        scored.append(
+            (
+                score,
+                item
+            )
+        )
+
+    scored.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
+
+    # --------------------------------------------------------
+    # Only include meaningful experience.
+    #
+    # For technical roles we prefer the strongest evidence
+    # rather than filling the CV/letter with unrelated work.
+    # --------------------------------------------------------
+
+    selected = [
+        item
+        for score, item in scored
+        if score >= 8
     ]
 
-    selected = []
-
-    # First use skills in preferred order
-    for preferred in priority:
-
-        for skill in matching_skills:
-
-            if skill.lower() == preferred.lower():
-
-                if skill not in selected:
-
-                    selected.append(skill)
-
-    # Then add remaining matching skills
-    for skill in matching_skills:
-
-        if skill not in selected:
-
-            selected.append(skill)
-
-    return selected[:max_skills]
+    # Maximum of two experiences in the letter
+    return selected[:2]
 
 
 # ============================================================
-# COVER LETTER CONTENT
+# PROJECT SELECTION
 # ============================================================
 
-def create_opening(
-    candidate_name,
-    company,
-    job_title
+def project_relevance_score(
+    project,
+    job,
+    role_type
 ):
-    """
-    Create the opening paragraph.
-    """
+    """Calculate relevance of a project."""
+
+    job_text = get_job_text(job)
+
+    project_text = normalize_text(
+        f"""
+        {project.get('name', '')}
+        {project.get('description', '')}
+        {' '.join(project.get('responsibilities', []))}
+        {' '.join(project.get('technologies', []))}
+        """
+    )
+
+    job_words = set(
+        job_text.split()
+    )
+
+    project_words = set(
+        project_text.split()
+    )
+
+    overlap = job_words.intersection(
+        project_words
+    )
+
+    score = min(
+        len(overlap) * 3,
+        15
+    )
+
+    # --------------------------------------------------------
+    # Backend
+    # --------------------------------------------------------
+
+    if role_type == "backend":
+
+        if (
+            "flask" in project_text
+            or "python" in project_text
+            or "backend" in project_text
+            or "rest api" in project_text
+            or "api" in project_text
+        ):
+            score += 15
+
+        if "database" in project_text:
+            score += 5
+
+    # --------------------------------------------------------
+    # Frontend
+    # --------------------------------------------------------
+
+    elif role_type == "frontend":
+
+        if (
+            "react" in project_text
+            or "javascript" in project_text
+            or "frontend" in project_text
+        ):
+            score += 15
+
+        if (
+            "dashboard" in project_text
+            or "web" in project_text
+        ):
+            score += 5
+
+    # --------------------------------------------------------
+    # Full stack
+    # --------------------------------------------------------
+
+    elif role_type == "full_stack":
+
+        backend = (
+            "flask" in project_text
+            or "python" in project_text
+            or "backend" in project_text
+            or "api" in project_text
+        )
+
+        frontend = (
+            "react" in project_text
+            or "javascript" in project_text
+            or "frontend" in project_text
+        )
+
+        if backend:
+            score += 10
+
+        if frontend:
+            score += 10
+
+    return score
+
+
+def select_relevant_projects(
+    profile,
+    job
+):
+    """Select the strongest projects for the job."""
+
+    role_type = detect_role_type(job)
+
+    projects = profile.get(
+        "projects",
+        []
+    )
+
+    scored = []
+
+    for project in projects:
+
+        score = project_relevance_score(
+            project,
+            job,
+            role_type
+        )
+
+        scored.append(
+            (
+                score,
+                project
+            )
+        )
+
+    scored.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
+
+    selected = [
+        project
+        for score, project in scored
+        if score > 0
+    ]
+
+    # Keep the letter focused
+    return selected[:3]
+
+
+# ============================================================
+# SUMMARY / OPENING
+# ============================================================
+
+def get_role_focus(role_type):
+    """Return the main focus for a role."""
+
+    if role_type == "backend":
+        return (
+            "backend development, REST API development, "
+            "and database implementation"
+        )
+
+    if role_type == "frontend":
+        return (
+            "frontend development, web application development, "
+            "and building user-facing interfaces"
+        )
+
+    if role_type == "full_stack":
+        return (
+            "full-stack web development across frontend and "
+            "backend applications"
+        )
 
     return (
-        f"Dear Hiring Manager,\n\n"
+        "software development and building practical "
+        "web applications"
+    )
+
+
+def build_opening(
+    job_title,
+    company,
+    role_type
+):
+    """Build the opening paragraph."""
+
+    focus = get_role_focus(
+        role_type
+    )
+
+    return (
         f"I am writing to express my interest in the "
-        f"{job_title} position at {company}. "
-        f"As a Junior Software Developer with hands-on "
-        f"experience building web applications and backend "
-        f"services, I am excited about the opportunity to "
+        f"{job_title} position at {company}. As a Junior "
+        f"Software Developer with hands-on experience in "
+        f"{focus}, I am excited about the opportunity to "
         f"contribute my technical skills to your team."
     )
 
 
-def create_skills_paragraph(
-    role_type,
-    matching_skills
-):
-    """
-    Create a paragraph focused on technical skills.
-    """
+# ============================================================
+# SKILL PARAGRAPH
+# ============================================================
 
-    skills = select_top_skills(
-        matching_skills
+def build_skill_paragraph(
+    skills,
+    role_type
+):
+    """Build a role-specific technical skills paragraph."""
+
+    flat_skills = flatten_skills(
+        skills
     )
 
-    if skills:
-
-        skill_text = ", ".join(
-            skills[:-1]
+    if not flat_skills:
+        return (
+            "My technical background includes software "
+            "development, web application development, and "
+            "working collaboratively on technical projects."
         )
 
-        if len(skills) > 1:
-
-            skill_text += (
-                f", and {skills[-1]}"
-            )
-
-        else:
-
-            skill_text = skills[0]
-
-    else:
-
-        skill_text = (
-            "Python, Flask, REST APIs, "
-            "React, databases, and Git"
-        )
+    skill_text = ", ".join(
+        flat_skills
+    )
 
     if role_type == "backend":
 
         return (
-            f"My technical background includes "
-            f"{skill_text}. I have practical experience "
-            f"developing backend functionality, building "
-            f"REST APIs, working with databases, and "
-            f"contributing to team-based software projects."
+            f"My technical background includes {skill_text}. "
+            f"I have practical experience developing backend "
+            f"functionality, building REST APIs, working with "
+            f"databases, and contributing to team-based "
+            f"software projects."
         )
 
     if role_type == "frontend":
 
         return (
-            f"My technical background includes "
-            f"{skill_text}. I have practical experience "
-            f"building web interfaces with modern "
-            f"JavaScript technologies and integrating "
-            f"frontend applications with backend services."
+            f"My technical background includes {skill_text}. "
+            f"I have practical experience building web "
+            f"interfaces and applications using modern "
+            f"frontend technologies and contributing to "
+            f"team-based software projects."
         )
 
-    if role_type == "fullstack":
+    if role_type == "full_stack":
 
         return (
-            f"My technical background includes "
-            f"{skill_text}. I have experience working "
-            f"across both frontend and backend development, "
-            f"including building web interfaces, developing "
-            f"backend services, designing databases, and "
-            f"integrating REST APIs."
+            f"My technical background includes {skill_text}. "
+            f"I have experience working across frontend and "
+            f"backend development, including web interfaces, "
+            f"backend services, databases, and REST APIs."
         )
 
     return (
-        f"My technical background includes "
-        f"{skill_text}. Through my software engineering "
-        f"training and projects, I have developed practical "
-        f"experience in web development, backend services, "
-        f"databases, and collaborative software development."
+        f"My technical background includes {skill_text}. "
+        f"I have practical experience applying these "
+        f"technologies to web applications and software "
+        f"development projects."
     )
 
 
-def create_experience_paragraph(
+# ============================================================
+# EXPERIENCE PARAGRAPH
+# ============================================================
+
+def get_best_software_experience(
     experience
 ):
-    """
-    Create a paragraph based on the candidate's
-    most relevant professional experience.
-    """
+    """Find the strongest software-related experience."""
 
-    if not experience:
+    for item in experience:
 
-        return (
-            "My experience has strengthened my ability "
-            "to approach technical problems systematically, "
-            "work collaboratively, and deliver practical "
-            "software solutions."
+        title = normalize_text(
+            item.get("title", "")
         )
 
-    item = experience[0]
+        responsibilities = normalize_text(
+            " ".join(
+                item.get(
+                    "responsibilities",
+                    []
+                )
+            )
+        )
+
+        combined = (
+            f"{title} {responsibilities}"
+        )
+
+        if (
+            "software" in combined
+            or "developer" in combined
+            or "backend" in combined
+            or "api" in combined
+        ):
+            return item
+
+    return None
+
+
+def build_experience_paragraph(
+    experience,
+    role_type
+):
+    """Build a paragraph from the strongest experience."""
+
+    if not experience:
+        return (
+            "My practical experience has given me an "
+            "opportunity to work on software projects, "
+            "collaborate with teams, and develop solutions "
+            "to technical requirements."
+        )
+
+    item = get_best_software_experience(
+        experience
+    )
+
+    if not item:
+        item = experience[0]
 
     title = item.get(
         "title",
-        "Software Developer"
+        "my previous role"
     )
 
     company = item.get(
@@ -517,47 +758,118 @@ def create_experience_paragraph(
         []
     )
 
-    responsibility_text = ""
-
-    if responsibilities:
-
-        responsibility_text = " ".join(
-            responsibilities[:2]
+    cleaned = [
+        clean_sentence(
+            responsibility
         )
+        for responsibility in responsibilities
+        if responsibility
+    ]
 
-    if responsibility_text:
+    # --------------------------------------------------------
+    # Software Engineering Intern
+    # --------------------------------------------------------
+
+    if (
+        "software engineering intern"
+        in normalize_text(title)
+    ):
+
+        api_work = None
+        collaboration = None
+
+        for responsibility in cleaned:
+
+            lower = normalize_text(
+                responsibility
+            )
+
+            if (
+                "rest api" in lower
+                or "api" in lower
+            ):
+                api_work = responsibility
+
+            if "collaborat" in lower:
+                collaboration = responsibility
+
+        sentences = []
+
+        if api_work:
+            sentences.append(
+                f"During my experience as {title} at "
+                f"{company}, I {api_work[0].lower()}"
+                f"{api_work[1:]}"
+            )
+
+        if collaboration:
+            sentences.append(
+                f"I also {collaboration[0].lower()}"
+                f"{collaboration[1:]}"
+            )
+
+        if sentences:
+
+            if role_type == "frontend":
+
+                return (
+                    f"During my experience as {title} at "
+                    f"{company}, I contributed to a production "
+                    f"project and collaborated with the "
+                    f"development team to deliver backend "
+                    f"functionality. This strengthened my "
+                    f"understanding of development workflows, "
+                    f"team collaboration, and delivering "
+                    f"technical work to requirements."
+                )
+
+            return (
+                " ".join(sentences)
+                + " This experience strengthened my ability "
+                "to understand technical requirements, "
+                "collaborate with development teams, and "
+                "deliver reliable software functionality."
+            )
+
+    # --------------------------------------------------------
+    # Generic experience fallback
+    # --------------------------------------------------------
+
+    useful = cleaned[:2]
+
+    if useful:
 
         return (
             f"In my role as {title} at {company}, "
-            f"I gained practical experience in "
-            f"{responsibility_text.lower()} "
-            f"This experience strengthened my ability "
-            f"to collaborate with development teams, "
-            f"understand technical requirements, and "
-            f"deliver reliable solutions."
+            + " ".join(useful)
+            + " This experience strengthened my "
+            "problem-solving, communication, and ability "
+            "to contribute effectively to a team."
         )
 
     return (
-        f"My experience as {title} at {company} "
-        f"has strengthened my ability to work "
-        f"collaboratively, solve problems, and "
-        f"contribute to technical projects."
+        f"My experience as {title} at {company} has "
+        "strengthened my ability to work collaboratively, "
+        "understand requirements, and contribute to "
+        "practical solutions."
     )
 
 
-def create_projects_paragraph(
-    projects
+# ============================================================
+# PROJECT PARAGRAPH
+# ============================================================
+
+def build_project_paragraph(
+    projects,
+    role_type
 ):
-    """
-    Mention relevant projects when useful.
-    """
+    """Build a concise project paragraph."""
 
     if not projects:
-
         return (
-            "I have also developed practical software "
-            "projects that have strengthened my "
-            "problem-solving and development skills."
+            "Through my software projects, I have gained "
+            "practical experience applying development "
+            "concepts to real-world problems."
         )
 
     project_names = [
@@ -569,142 +881,171 @@ def create_projects_paragraph(
         if project.get("name")
     ]
 
-    if len(project_names) >= 3:
+    names = ", ".join(
+        project_names
+    )
 
-        project_text = (
-            f"{project_names[0]}, "
-            f"{project_names[1]}, and "
-            f"{project_names[2]}"
+    if role_type == "backend":
+
+        return (
+            f"Through projects including {names}, I have "
+            f"applied my knowledge of backend development, "
+            f"REST APIs, database design, and full-stack "
+            f"application development. These projects have "
+            f"given me practical experience working through "
+            f"technical requirements and contributing to "
+            f"complete software solutions."
         )
 
-    elif len(project_names) == 2:
+    if role_type == "frontend":
 
-        project_text = (
-            f"{project_names[0]} and "
-            f"{project_names[1]}"
+        return (
+            f"Through projects including {names}, I have "
+            f"applied my knowledge of frontend development, "
+            f"React, JavaScript, and web application "
+            f"development. These projects have strengthened "
+            f"my ability to build user-facing applications "
+            f"while working within broader software projects."
         )
 
-    elif len(project_names) == 1:
+    if role_type == "full_stack":
 
-        project_text = project_names[0]
-
-    else:
-
-        project_text = (
-            "several full-stack web applications"
+        return (
+            f"Through projects including {names}, I have "
+            f"applied my knowledge across frontend and "
+            f"backend development, including React, Python, "
+            f"Flask, REST APIs, and database design. These "
+            f"projects have given me practical experience "
+            f"contributing to complete web applications."
         )
 
     return (
-        f"Through projects including {project_text}, "
-        f"I have applied my knowledge of software "
-        f"development in practical settings. "
-        f"These projects involved areas such as "
-        f"backend development, frontend development, "
-        f"database design, REST APIs, and team "
-        f"collaboration."
+        f"Through projects including {names}, I have "
+        f"applied my software development knowledge to "
+        f"practical applications, working through technical "
+        f"requirements and contributing to complete "
+        f"software solutions."
     )
 
 
-def create_closing(
-    candidate_name
-):
-    """
-    Create closing paragraph.
-    """
+# ============================================================
+# CLOSING
+# ============================================================
+
+def build_closing():
+    """Build the closing paragraph."""
 
     return (
-        "I would welcome the opportunity to discuss "
-        "how my background, technical skills, and "
-        "enthusiasm for software development could "
-        "contribute to your team. Thank you for "
-        "considering my application. I look forward "
-        "to the possibility of discussing the role "
-        "with you.\n\n"
-        "Kind regards,\n"
-        f"{candidate_name}"
+        "I would welcome the opportunity to discuss how my "
+        "background, technical skills, and enthusiasm for "
+        "software development could contribute to your team. "
+        "Thank you for considering my application. I look "
+        "forward to the possibility of discussing the role "
+        "with you."
     )
 
+
+# ============================================================
+# COVER LETTER GENERATION
+# ============================================================
 
 def generate_cover_letter(
-    profile,
-    job
+    job,
+    match=None
 ):
     """
     Generate a complete tailored cover letter.
+
+    Args:
+        job: Dictionary containing job information.
+        match: Optional matcher result.
+
+    Returns:
+        Cover letter as a string.
     """
 
-    personal = profile.get(
-        "personal",
-        {}
+    profile = load_candidate_profile()
+
+    job_title = (
+        job.get(
+            "title",
+            "Software Developer"
+        )
+        .strip()
     )
 
-    candidate_name = personal.get(
-        "name",
-        "Elizabeth Njuguna"
+    company = (
+        job.get(
+            "company",
+            "your organization"
+        )
+        .strip()
     )
 
-    company = job.get(
-        "company",
-        "your organization"
+    role_type = detect_role_type(
+        job
     )
 
-    job_title = job.get(
-        "title",
-        "Software Developer"
+    # --------------------------------------------------------
+    # Select relevant information
+    # --------------------------------------------------------
+
+    skills = select_relevant_skills(
+        profile,
+        job,
+        match
     )
 
-    role_type = determine_role_type(
-        job_title
-    )
-
-    matching_skills = find_matching_skills(
+    experience = select_relevant_experience(
         profile,
         job
     )
 
-    relevant_experience = find_relevant_experience(
+    projects = select_relevant_projects(
         profile,
         job
     )
 
-    relevant_projects = find_relevant_projects(
-        profile,
-        job
-    )
+    # --------------------------------------------------------
+    # Build paragraphs
+    # --------------------------------------------------------
 
-    opening = create_opening(
-        candidate_name,
+    opening = build_opening(
+        job_title,
         company,
-        job_title
+        role_type
     )
 
-    skills_paragraph = create_skills_paragraph(
-        role_type,
-        matching_skills
+    skill_paragraph = build_skill_paragraph(
+        skills,
+        role_type
     )
 
-    experience_paragraph = create_experience_paragraph(
-        relevant_experience
+    experience_paragraph = build_experience_paragraph(
+        experience,
+        role_type
     )
 
-    projects_paragraph = create_projects_paragraph(
-        relevant_projects
+    project_paragraph = build_project_paragraph(
+        projects,
+        role_type
     )
 
-    closing = create_closing(
-        candidate_name
-    )
+    closing = build_closing()
+
+    # --------------------------------------------------------
+    # Assemble letter
+    # --------------------------------------------------------
 
     return (
-        opening
-        + "\n\n"
-        + skills_paragraph
-        + "\n\n"
-        + experience_paragraph
-        + "\n\n"
-        + projects_paragraph
-        + "\n\n"
-        + closing
+        "Dear Hiring Manager,\n\n"
+        f"{opening}\n\n"
+        f"{skill_paragraph}\n\n"
+        f"{experience_paragraph}\n\n"
+        f"{project_paragraph}\n\n"
+        f"{closing}\n\n"
+        "Kind regards,\n"
+        f"{profile['personal']['name']}"
     )
 
 
@@ -713,32 +1054,33 @@ def generate_cover_letter(
 # ============================================================
 
 def create_document():
-    """
-    Create and configure a Word document.
-    """
+    """Create and configure a Word document."""
 
     document = Document()
 
     styles = document.styles
 
-    styles["Normal"].font.name = "Arial"
-    styles["Normal"].font.size = Pt(10.5)
+    normal = styles["Normal"]
+
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10.5)
+
+    normal.paragraph_format.space_after = Pt(6)
 
     return document
 
 
-def add_document_header(
+def add_letter_header(
     document,
     profile
 ):
-    """
-    Add candidate contact information.
-    """
+    """Add candidate contact information."""
 
-    personal = profile.get(
-        "personal",
-        {}
-    )
+    personal = profile["personal"]
+
+    # --------------------------------------------------------
+    # Name
+    # --------------------------------------------------------
 
     paragraph = document.add_paragraph()
 
@@ -747,15 +1089,16 @@ def add_document_header(
     )
 
     run = paragraph.add_run(
-        personal.get(
-            "name",
-            "Elizabeth Njuguna"
-        )
+        personal["name"]
     )
 
     run.bold = True
     run.font.name = "Arial"
-    run.font.size = Pt(16)
+    run.font.size = Pt(18)
+
+    # --------------------------------------------------------
+    # Contact
+    # --------------------------------------------------------
 
     paragraph = document.add_paragraph()
 
@@ -763,29 +1106,22 @@ def add_document_header(
         WD_ALIGN_PARAGRAPH.CENTER
     )
 
-    contact_parts = []
-
-    if personal.get("phone"):
-        contact_parts.append(
-            personal["phone"]
-        )
-
-    if personal.get("email"):
-        contact_parts.append(
-            personal["email"]
-        )
-
-    if personal.get("location"):
-        contact_parts.append(
-            personal["location"]
-        )
+    contact = (
+        f"{personal['phone']} | "
+        f"{personal['email']} | "
+        f"{personal['location']}"
+    )
 
     run = paragraph.add_run(
-        " | ".join(contact_parts)
+        contact
     )
 
     run.font.name = "Arial"
     run.font.size = Pt(9)
+
+    # --------------------------------------------------------
+    # Links
+    # --------------------------------------------------------
 
     paragraph = document.add_paragraph()
 
@@ -793,33 +1129,24 @@ def add_document_header(
         WD_ALIGN_PARAGRAPH.CENTER
     )
 
-    links = []
-
-    if personal.get("linkedin"):
-        links.append(
-            personal["linkedin"]
-        )
-
-    if personal.get("github"):
-        links.append(
-            personal["github"]
-        )
+    links = (
+        f"{personal['linkedin']} | "
+        f"{personal['github']}"
+    )
 
     run = paragraph.add_run(
-        " | ".join(links)
+        links
     )
 
     run.font.name = "Arial"
     run.font.size = Pt(9)
 
 
-def add_letter_content(
+def add_letter_body(
     document,
     letter
 ):
-    """
-    Add the cover letter text to the document.
-    """
+    """Add cover letter text to the document."""
 
     paragraphs = letter.split(
         "\n\n"
@@ -830,7 +1157,6 @@ def add_letter_content(
         paragraph = document.add_paragraph()
 
         paragraph.paragraph_format.space_after = Pt(8)
-        paragraph.paragraph_format.line_spacing = 1.08
 
         run = paragraph.add_run(
             text
@@ -844,16 +1170,16 @@ def add_letter_content(
 # FILE NAME
 # ============================================================
 
-def create_application_folder_name(
+def create_application_directory_name(
     job
 ):
     """
-    Create a safe folder name for a job application.
+    Create a safe application directory name.
     """
 
     title = job.get(
         "title",
-        "job"
+        "software-developer"
     )
 
     company = job.get(
@@ -861,48 +1187,63 @@ def create_application_folder_name(
         "company"
     )
 
-    text = (
-        f"{title} at {company}"
+    name = (
+        f"{company}-{title}"
     )
 
-    text = text.lower()
+    name = normalize_text(
+        name
+    )
 
-    text = re.sub(
+    name = re.sub(
         r"[^a-z0-9]+",
         "-",
-        text
+        name
     )
 
-    text = text.strip("-")
+    name = name.strip(
+        "-"
+    )
 
-    # Prevent excessively long paths
-    return text[:150]
+    return name[:120]
 
 
 # ============================================================
-# MAIN TAILORING FUNCTION
+# SAVE COVER LETTER
 # ============================================================
 
-def tailor_cover_letter(
+def save_cover_letter(
     job,
+    match=None,
     output_directory=None
 ):
     """
-    Generate a tailored cover letter for a job.
+    Generate and save a tailored cover letter.
 
     Returns:
-        Path to the generated DOCX file.
+        Path to generated DOCX.
     """
 
     profile = load_candidate_profile()
 
-    # --------------------------------------------------------
-    # Generate letter
-    # --------------------------------------------------------
-
     letter = generate_cover_letter(
-        profile,
-        job
+        job,
+        match
+    )
+
+    document = create_document()
+
+    add_letter_header(
+        document,
+        profile
+    )
+
+    # Space between header and letter
+    document.add_paragraph()
+
+    add_letter_body(
+        document,
+        letter
     )
 
     # --------------------------------------------------------
@@ -911,46 +1252,21 @@ def tailor_cover_letter(
 
     if output_directory is None:
 
-        folder_name = (
-            create_application_folder_name(
+        output_directory = (
+            APPLICATIONS_DIR
+            / create_application_directory_name(
                 job
             )
         )
 
-        output_directory = (
-            APPLICATIONS_DIR / folder_name
-        )
-
-    else:
-
-        output_directory = Path(
-            output_directory
-        )
+    output_directory = Path(
+        output_directory
+    )
 
     output_directory.mkdir(
         parents=True,
         exist_ok=True
     )
-
-    # --------------------------------------------------------
-    # Create Word document
-    # --------------------------------------------------------
-
-    document = create_document()
-
-    add_document_header(
-        document,
-        profile
-    )
-
-    add_letter_content(
-        document,
-        letter
-    )
-
-    # --------------------------------------------------------
-    # Save
-    # --------------------------------------------------------
 
     output_file = (
         output_directory
@@ -965,80 +1281,54 @@ def tailor_cover_letter(
 
 
 # ============================================================
-# TEST HELPERS
+# DISPLAY HELPERS
 # ============================================================
 
-def print_cover_letter_test(
-    job
+def print_cover_letter(
+    job,
+    letter,
+    skills,
+    experience,
+    projects
 ):
-    """
-    Print generated cover letter information
-    for testing purposes.
-    """
-
-    profile = load_candidate_profile()
-
-    matching_skills = find_matching_skills(
-        profile,
-        job
-    )
-
-    relevant_experience = find_relevant_experience(
-        profile,
-        job
-    )
-
-    relevant_projects = find_relevant_projects(
-        profile,
-        job
-    )
-
-    letter = generate_cover_letter(
-        profile,
-        job
-    )
+    """Display generated cover letter information."""
 
     print()
     print("=" * 60)
-
     print(
         f"Job: {job.get('title', '')}"
     )
-
     print(
         f"Company: {job.get('company', '')}"
     )
-
     print()
 
-    print(
-        "Matching skills:"
+    print("Matching skills:")
+
+    flat_skills = flatten_skills(
+        skills
     )
 
-    if matching_skills:
+    if flat_skills:
 
         print(
             "  "
             + ", ".join(
-                matching_skills
+                flat_skills
             )
         )
 
     else:
 
-        print(
-            "  None"
-        )
+        print("  None")
 
     print()
 
-    print(
-        "Selected experience:"
-    )
+    print("Selected experience:")
 
-    if relevant_experience:
+    if experience:
 
-        for item in relevant_experience:
+        for item in experience:
 
             print(
                 f"  {item.get('title', '')} "
@@ -1048,19 +1338,15 @@ def print_cover_letter_test(
 
     else:
 
-        print(
-            "  None"
-        )
+        print("  None")
 
     print()
 
-    print(
-        "Selected projects:"
-    )
+    print("Selected projects:")
 
-    if relevant_projects:
+    if projects:
 
-        for project in relevant_projects:
+        for project in projects:
 
             print(
                 f"  {project.get('name', '')}"
@@ -1068,25 +1354,14 @@ def print_cover_letter_test(
 
     else:
 
-        print(
-            "  None"
-        )
+        print("  None")
 
     print()
 
-    print(
-        "Generated cover letter:"
-    )
-
-    print(
-        "-" * 60
-    )
-
+    print("Generated cover letter:")
+    print("-" * 60)
     print(letter)
-
-    print(
-        "-" * 60
-    )
+    print("-" * 60)
 
 
 # ============================================================
@@ -1099,9 +1374,7 @@ if __name__ == "__main__":
     print("COVER LETTER TEST")
     print("=" * 60)
 
-    # --------------------------------------------------------
-    # Test jobs
-    # --------------------------------------------------------
+    profile = load_candidate_profile()
 
     test_jobs = [
 
@@ -1109,12 +1382,8 @@ if __name__ == "__main__":
             "title": "Backend Developer",
             "company": "Test Company",
             "description": """
-            We are looking for a Backend Developer
-            with experience in Python, Flask, REST APIs,
-            SQL, databases and Git.
-            The successful candidate will develop APIs,
-            implement backend functionality and
-            collaborate with the development team.
+            We are looking for a backend developer with
+            Python, Flask, REST APIs, SQL and Git experience.
             """
         },
 
@@ -1122,11 +1391,9 @@ if __name__ == "__main__":
             "title": "Frontend Developer",
             "company": "Test Company",
             "description": """
-            We are looking for a Frontend Developer
-            with experience in HTML, CSS, JavaScript,
-            React and Next.js.
-            The candidate will build responsive web
-            interfaces and work with backend developers.
+            We are looking for a frontend developer with
+            HTML, CSS, JavaScript, React.js and Next.js
+            experience.
             """
         },
 
@@ -1134,34 +1401,60 @@ if __name__ == "__main__":
             "title": "Full Stack Developer",
             "company": "Test Company",
             "description": """
-            We are looking for a Full Stack Developer
-            with experience in Python, Flask, REST APIs,
-            JavaScript, React, SQL and Git.
+            We are looking for a full stack developer with
+            JavaScript, React.js, Python, Flask, REST APIs,
+            SQL and Git experience.
             """
         }
     ]
 
-    # --------------------------------------------------------
-    # Test each job
-    # --------------------------------------------------------
-
     for job in test_jobs:
 
-        print_cover_letter_test(
+        skills = select_relevant_skills(
+            profile,
             job
         )
 
-        output = tailor_cover_letter(
-            job,
-            APPLICATIONS_DIR / "test-application"
+        experience = select_relevant_experience(
+            profile,
+            job
         )
 
-        print()
-        print(
-            f"Created cover letter: {output}"
+        projects = select_relevant_projects(
+            profile,
+            job
         )
+
+        letter = generate_cover_letter(
+            job
+        )
+
+        print_cover_letter(
+            job,
+            letter,
+            skills,
+            experience,
+            projects
+        )
+
+    # --------------------------------------------------------
+    # Generate one test DOCX
+    # --------------------------------------------------------
+
+    output = save_cover_letter(
+        test_jobs[0],
+        output_directory=(
+            APPLICATIONS_DIR
+            / "test-application"
+        )
+    )
 
     print()
+    print(
+        f"Created cover letter: {output}"
+    )
+
     print("=" * 60)
     print("COVER LETTER TEST COMPLETE")
     print("=" * 60)
+
