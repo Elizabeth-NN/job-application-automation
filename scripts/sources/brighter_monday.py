@@ -1,1009 +1,1445 @@
+"""
+BrighterMonday job source.
 
+Collects technology-related jobs from BrighterMonday using
+multiple category/search URLs, removes duplicates, fetches
+full job details, and filters unrelated jobs.
+
+Compatible with:
+    scripts.job_collector
+
+Exports:
+    collect_jobs()
+    get_job_details()
+    get_page()
+"""
+
+from __future__ import annotations
+
+import json
 import re
-from urllib.parse import urljoin
+import time
+from typing import Dict, List, Optional
+from urllib.parse import (
+    parse_qs,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlunparse,
+)
 
 import requests
 from bs4 import BeautifulSoup
 
 
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 BASE_URL = "https://www.brightermonday.co.ke"
+
+SEARCH_URLS = [
+    f"{BASE_URL}/jobs",
+    f"{BASE_URL}/jobs/software-data",
+    f"{BASE_URL}/jobs/software-data/nairobi",
+    f"{BASE_URL}/jobs/software-data/full-time",
+    f"{BASE_URL}/jobs/software-data/nairobi/full-time",
+    f"{BASE_URL}/jobs/software-data/remote",
+    f"{BASE_URL}/jobs/software-data/remote/full-time",
+]
+
+MAX_PAGES = 5
+
+REQUEST_TIMEOUT = 20
+
+MAX_RETRIES = 3
+
+RETRY_DELAYS = [2, 4, 8]
+
+REQUEST_DELAY = 0.5
+
+DETAIL_DELAY = 0.3
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) "
         "AppleWebKit/537.36 "
         "(KHTML, like Gecko) "
-        "Chrome/140.0 Safari/537.36"
-    )
+        "Chrome/131.0.0.0 "
+        "Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,"
+        "image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive",
 }
 
 
 # ============================================================
-# TECHNOLOGY KEYWORDS
+# TITLE FILTERS
 # ============================================================
 
-# Strong technology keywords.
-#
-# These are deliberately more specific than generic words such
-# as "system", "data", "digital", or "software".
-#
-# The matcher will make the final decision about how well the
-# job matches the user's profile.
-
-STRONG_TECHNOLOGY_KEYWORDS = {
+TECH_TITLE_PATTERNS = [
     # Software development
-    "software developer",
-    "software engineer",
-    "software development",
-    "software engineering",
-    "web developer",
-    "webmaster",
-    "frontend developer",
-    "front-end developer",
-    "backend developer",
-    "back-end developer",
-    "full stack developer",
-    "fullstack developer",
-    "mobile developer",
-    "application developer",
-    "application engineer",
-    "programmer",
-    "programming",
+    r"\bsoftware\s+developer\b",
+    r"\bsoftware\s+engineer\b",
+    r"\bsoftware\s+development\b",
+    r"\bweb\s+developer\b",
+    r"\bwebsite\s+developer\b",
+    r"\bwebmaster\b",
 
-    # Python / backend
-    "python developer",
-    "python engineer",
-    "flask",
-    "django",
-    "fastapi",
-    "rest api",
-    "restful api",
-    "api development",
-    "api developer",
-    "backend",
+    # Backend / frontend / full stack
+    r"\bbackend\s+developer\b",
+    r"\bback[-\s]?end\s+developer\b",
+    r"\bfrontend\s+developer\b",
+    r"\bfront[-\s]?end\s+developer\b",
+    r"\bfull[-\s]?stack\s+developer\b",
+    r"\bfullstack\s+developer\b",
 
-    # JavaScript / frontend
-    "javascript developer",
-    "typescript",
-    "react developer",
-    "react.js",
-    "next.js",
-    "node.js",
-    "nodejs",
-    "vue.js",
-    "angular developer",
+    # Languages
+    r"\bpython\s+developer\b",
+    r"\breact\s+developer\b",
+    r"\bjavascript\s+developer\b",
+    r"\bphp\s+developer\b",
+    r"\bjava\s+developer\b",
+    r"\bnode(?:\.js)?\s+developer\b",
+    r"\bruby\s+developer\b",
+    r"\bgolang\s+developer\b",
+    r"\bgo\s+developer\b",
 
-    # Databases
-    "database developer",
-    "database administrator",
-    "database engineer",
-    "postgresql",
-    "mysql",
-    "mongodb",
-    "sql developer",
+    # Applications / systems
+    r"\bapplication\s+developer\b",
+    r"\bapplications\s+developer\b",
+    r"\bsystems?\s+developer\b",
+    r"\bprogrammer\b",
 
-    # Other programming languages
-    "java developer",
-    "c# developer",
-    ".net developer",
-    "php developer",
-    "ruby developer",
-    "go developer",
-    "golang developer",
+    # Data
+    r"\bdata\s+analyst\b",
+    r"\bdata\s+engineer\b",
+    r"\bdata\s+scientist\b",
+    r"\bdata\s+developer\b",
+
+    # Database
+    r"\bdatabase\s+developer\b",
+    r"\bdatabase\s+administrator\b",
 
     # DevOps / cloud
-    "devops engineer",
-    "devops developer",
-    "cloud engineer",
-    "cloud developer",
-    "site reliability engineer",
+    r"\bdevops\s+engineer\b",
+    r"\bdevops\b",
+    r"\bcloud\s+engineer\b",
+    r"\bcloud\s+developer\b",
 
-    # Data / AI
-    "data engineer",
-    "data scientist",
-    "machine learning engineer",
-    "machine learning developer",
-    "artificial intelligence engineer",
-    "ai engineer",
+    # QA / testing
+    r"\bqa\s+engineer\b",
+    r"\bquality\s+assurance\s+engineer\b",
+    r"\bsoftware\s+tester\b",
+    r"\bsoftware\s+testing\b",
+    r"\btest\s+engineer\b",
+    r"\btest\s+analyst\b",
 
-    # Security / infrastructure
-    "cybersecurity",
-    "cyber security",
-    "security engineer",
-    "network engineer",
-    "network administrator",
-    "systems engineer",
-    "systems developer",
+    # Automation
+    r"\bautomation\s+engineer\b",
+    r"\brpa\s+developer\b",
 
-    # Mobile
-    "android developer",
-    "ios developer",
-    "flutter developer",
-    "mobile application developer",
-}
+    # Enterprise technology
+    r"\bservicenow\s+developer\b",
+    r"\bservice\s+now\s+developer\b",
+    r"\bdynamics\s+365\b",
+    r"\bpower\s+platform\b",
+    r"\berp\s+developer\b",
+    r"\bfineract\s+developer\b",
 
+    # Technical development
+    r"\btechnical\s+developer\b",
+    r"\bict\s+developer\b",
+    r"\bit\s+developer\b",
+    r"\bsoftware\s+officer\b",
+    r"\bapplications?\s+&\s+software\b",
 
-# Generic technology terms.
-#
-# These are NOT enough on their own to classify a job as
-# technology-related. They need supporting technical context.
-GENERIC_TECHNOLOGY_KEYWORDS = {
-    "developer",
-    "development",
-    "programmer",
-    "programming",
-    "software",
-    "api",
-    "database",
-    "sql",
-    "python",
-    "javascript",
-    "typescript",
-    "react",
-    "node.js",
-    "nodejs",
-    "java",
-    "c#",
-    ".net",
-    "php",
-    "go",
-    "golang",
-    "flutter",
-    "devops",
-    "cloud",
-    "cybersecurity",
-    "cyber security",
-    "machine learning",
-    "artificial intelligence",
-    "data engineer",
-    "data scientist",
-}
+    # Security
+    r"\bsecurity\s+analyst\b",
+    r"\bcyber\s+security\s+analyst\b",
+    r"\bcybersecurity\s+analyst\b",
+]
 
 
-# Words that frequently appear in non-technical jobs even though
-# they may mention technology, systems, software, data, etc.
-NON_TECHNOLOGY_TITLE_KEYWORDS = {
-    "accountant",
-    "accounting",
-    "sales",
-    "sales representative",
-    "sales agent",
-    "business development officer",
-    "business development",
-    "marketing",
-    "social media",
-    "graphic designer",
-    "administrator",
-    "administration",
-    "hr",
-    "human resource",
-    "human resources",
-    "finance assistant",
-    "finance officer",
-    "credit analyst",
-    "relationship officer",
-    "collection officer",
-    "field collection",
-    "waiter",
-    "waitress",
-    "project assistant",
-    "program officer",
-    "policy and advocacy",
-    "real estate",
-    "procurement",
-    "customer service",
-    "customer care",
-    "operations officer",
-    "office assistant",
-    "receptionist",
-}
+EXCLUDED_TITLE_PATTERNS = [
+    # Sales
+    r"\bsales\s+representative\b",
+    r"\bsales\s+executive\b",
+    r"\bsales\s+engineer\b",
+    r"\bsales\s+consultant\b",
+    r"\bsales\s+agent\b",
+    r"\bfield\s+sales\b",
+    r"\btechnical\s+sales\b",
+    r"\bsales\s+and\s+marketing\b",
 
+    # Business development
+    r"\bbusiness\s+development\b",
 
-# ============================================================
-# HTTP / HTML HELPERS
-# ============================================================
+    # Finance/accounting
+    r"\baccountant\b",
+    r"\baccounting\b",
+    r"\bfinance\s+assistant\b",
+    r"\bfinance\s+officer\b",
+    r"\bfinancial\s+analyst\b",
+    r"\bcredit\s+analyst\b",
+    r"\bdebt\s+recovery\b",
 
-def get_page(url):
-    """
-    Download a public webpage and return BeautifulSoup.
-    """
+    # HR/admin
+    r"\bhuman\s+resources\b",
+    r"\bhr\s+officer\b",
+    r"\bhr\s+manager\b",
+    r"\bhr\s*&\s*administration\b",
+    r"\bhuman\s+resource\s+manager\b",
+    r"\badministrator\b",
+    r"\boffice\s+admin\b",
+    r"\boffice\s+administrator\b",
+    r"\breceptionist\b",
 
-    response = requests.get(
-        url,
-        headers=HEADERS,
-        timeout=20,
-    )
+    # Marketing/design/content
+    r"\bmarketing\b",
+    r"\bdigital\s+marketer\b",
+    r"\bgraphic\s+designer\b",
+    r"\bcontent\s+lead\b",
+    r"\bcommunications?\s+officer\b",
 
-    response.raise_for_status()
+    # Operations
+    r"\boperations\s+manager\b",
+    r"\boperations\s+officer\b",
+    r"\boperations\s+executive\b",
 
-    return BeautifulSoup(
-        response.text,
-        "html.parser",
-    )
+    # Customer-facing
+    r"\brelationship\s+officer\b",
+    r"\brelationship\s+manager\b",
+    r"\bcustomer\s+service\b",
 
+    # Other unrelated occupations
+    r"\breal\s+estate\b",
+    r"\bproperty\s+manager\b",
+    r"\bwaiter\b",
+    r"\bwaitress\b",
+    r"\bdriver\b",
+    r"\bchef\b",
+    r"\bnurse\b",
+    r"\bteacher\b",
+    r"\bpharmaceutical\s+sales\b",
+    r"\bprogram\s+officer\b",
+    r"\bproject\s+assistant\b",
+    r"\binstrumentation\s+engineer\b",
+    r"\bcctv\b",
+    r"\bdomain\s+expert\b",
+    r"\bllm\s+trainer\b",
+    r"\bpersonalization\s+officer\b",
+    r"\btechnical\s+operator\b",
 
-def clean_text(text):
-    """
-    Normalize whitespace and remove unnecessary spacing.
-    """
-
-    if not text:
-        return ""
-
-    return " ".join(
-        text.split()
-    ).strip()
-
-
-def normalize_text(text):
-    """
-    Return lowercase normalized text.
-    """
-
-    return clean_text(text).lower()
+    # IT management / support
+    r"\bict\s+manager\b",
+    r"\bit\s+manager\b",
+    r"\binformation\s+systems\s+security\s+manager\b",
+    r"\bit\s+maintenance\b",
+    r"\bmaintenance\s+assistant\b",
+    r"\btechnical\s+support\b",
+    r"\bit\s+support\b",
+    r"\bhelp\s*desk\b",
+    r"\bsupport\s+officer\b",
+]
 
 
 # ============================================================
-# TECHNOLOGY FILTERING
+# DESCRIPTION TECHNOLOGY SIGNALS
 # ============================================================
 
-def contains_keyword(text, keyword):
-    """
-    Check whether a keyword occurs as a meaningful phrase.
-
-    Short / special keywords are handled using word boundaries
-    where appropriate to reduce accidental matches.
-    """
-
-    text = normalize_text(text)
-    keyword = normalize_text(keyword)
-
-    if not keyword:
-        return False
-
-    # Multi-word phrases can safely be searched directly.
-    if " " in keyword:
-        return keyword in text
-
-    # Escape special regex characters such as . in .net.
-    pattern = rf"(?<!\w){re.escape(keyword)}(?!\w)"
-
-    return bool(
-        re.search(
-            pattern,
-            text,
-            re.IGNORECASE,
-        )
-    )
-
-
-def title_is_clearly_non_technology(title):
-    """
-    Determine whether the title clearly represents a non-tech role.
-
-    This prevents descriptions containing words such as
-    'software', 'system', 'database', or 'digital' from causing
-    unrelated jobs to enter the technology pipeline.
-    """
-
-    normalized_title = normalize_text(title)
-
-    for keyword in NON_TECHNOLOGY_TITLE_KEYWORDS:
-
-        if contains_keyword(
-            normalized_title,
-            keyword,
-        ):
-            return True
-
-    return False
-
-
-def is_strong_technology_title(title):
-    """
-    Determine whether the title itself strongly identifies
-    a technology role.
-    """
-
-    if not title:
-        return False
-
-    if title_is_clearly_non_technology(title):
-        return False
-
-    normalized_title = normalize_text(title)
-
-    for keyword in STRONG_TECHNOLOGY_KEYWORDS:
-
-        if contains_keyword(
-            normalized_title,
-            keyword,
-        ):
-            return True
-
-    return False
-
-
-def is_technology_job(title, description=""):
-    """
-    Determine whether a listing is likely technology-related.
-
-    Strategy:
-
-    1. Reject clearly non-technology titles.
-    2. Accept strong technology titles immediately.
-    3. For generic titles, inspect the description.
-    4. Require multiple technical signals in the description
-       rather than relying on one generic word.
-    """
-
-    if not title:
-        return False
-
-    # --------------------------------------------------------
-    # Step 1: Reject obvious non-tech titles.
-    # --------------------------------------------------------
-
-    if title_is_clearly_non_technology(title):
-        return False
-
-    # --------------------------------------------------------
-    # Step 2: Strong technology title.
-    # --------------------------------------------------------
-
-    if is_strong_technology_title(title):
-        return True
-
-    # --------------------------------------------------------
-    # Step 3: Description analysis for generic titles.
-    # --------------------------------------------------------
-
-    if not description:
-        return False
-
-    normalized_description = normalize_text(
-        description
-    )
-
-    matched_keywords = []
-
-    for keyword in GENERIC_TECHNOLOGY_KEYWORDS:
-
-        if contains_keyword(
-            normalized_description,
-            keyword,
-        ):
-            matched_keywords.append(
-                keyword
-            )
-
-    # No technical signals.
-    if not matched_keywords:
-        return False
-
-    # --------------------------------------------------------
-    # Step 4: Require stronger evidence for generic titles.
-    # --------------------------------------------------------
-    #
-    # A single occurrence of "software", "system", "data",
-    # "digital", etc. is not enough.
-    #
-    # Examples:
-    #
-    # Accountant + "accounting software"
-    # Sales + "CRM system"
-    # Administrator + "information systems"
-    #
-    # These should not become technology jobs.
-
-    technical_development_terms = {
-        "developer",
-        "development",
-        "programmer",
-        "programming",
-        "api",
+TECHNOLOGY_KEYWORD_GROUPS = [
+    # Programming languages
+    [
         "python",
         "javascript",
         "typescript",
-        "react",
-        "node.js",
-        "nodejs",
         "java",
-        "c#",
-        ".net",
         "php",
-        "go",
+        "c#",
+        "c++",
+        "ruby",
         "golang",
+        "go programming",
+    ],
+
+    # Frameworks
+    [
         "flask",
         "django",
+        "react",
+        "next.js",
+        "node.js",
+        "express.js",
+        "laravel",
+        "spring boot",
         "fastapi",
+    ],
+
+    # Development
+    [
+        "software development",
+        "web development",
+        "application development",
+        "backend development",
+        "frontend development",
+        "api development",
+        "rest api",
+        "restful api",
+        "programming",
+        "coding",
+        "develop applications",
+        "develop software",
+        "develop websites",
+    ],
+
+    # Databases
+    [
+        "sql",
         "postgresql",
         "mysql",
         "mongodb",
-        "database developer",
-        "database engineer",
-        "frontend",
-        "backend",
-        "full stack",
-        "fullstack",
-        "software engineering",
-        "software developer",
-        "software engineer",
-        "web developer",
-        "mobile developer",
-        "android developer",
-        "ios developer",
-        "flutter",
+        "sqlite",
+        "database design",
+        "database development",
+        "database management",
+    ],
+
+    # Tools / infrastructure
+    [
+        "git",
+        "github",
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "ci/cd",
         "devops",
-        "cloud engineer",
-        "cloud developer",
-        "cybersecurity",
-        "machine learning",
-        "data engineer",
-        "data scientist",
-    }
+    ],
+]
 
-    strong_description_matches = []
 
-    for keyword in technical_development_terms:
+# ============================================================
+# SESSION
+# ============================================================
 
-        if contains_keyword(
-            normalized_description,
-            keyword,
-        ):
-            strong_description_matches.append(
-                keyword
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
+
+# ============================================================
+# TEXT HELPERS
+# ============================================================
+
+def clean_text(value: Optional[str]) -> str:
+    """Normalize whitespace."""
+
+    if not value:
+        return ""
+
+    value = re.sub(r"\s+", " ", value)
+
+    return value.strip()
+
+
+def normalize_url(url: str) -> str:
+    """Return a normalized absolute URL."""
+
+    if not url:
+        return ""
+
+    url = url.strip()
+
+    if url.startswith("/"):
+        url = urljoin(BASE_URL, url)
+
+    parsed = urlparse(url)
+
+    if not parsed.scheme:
+        return ""
+
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path.rstrip("/"),
+            "",
+            parsed.query,
+            "",
+        )
+    )
+
+
+def normalize_title(title: str) -> str:
+    """Normalize title for matching."""
+
+    return clean_text(title).lower()
+
+
+def page_url(base_url: str, page: int) -> str:
+    """Build pagination URL."""
+
+    if page <= 1:
+        return base_url
+
+    parsed = urlparse(base_url)
+
+    query = parse_qs(
+        parsed.query,
+        keep_blank_values=True,
+    )
+
+    query["page"] = [str(page)]
+
+    new_query = urlencode(
+        query,
+        doseq=True,
+    )
+
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment,
+        )
+    )
+
+
+def clean_value(value: str) -> str:
+    """
+    Clean common placeholder values returned by BrighterMonday.
+    """
+
+    value = clean_text(value)
+
+    if not value:
+        return ""
+
+    value = re.sub(
+        r"\s*\|\s*BrighterMonday.*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    value = re.sub(
+        r"\s*-\s*BrighterMonday.*$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    return clean_text(value)
+
+
+# ============================================================
+# HTTP
+# ============================================================
+
+def get_page(
+    url: str,
+    retries: int = MAX_RETRIES,
+) -> Optional[BeautifulSoup]:
+    """
+    Download a page and return BeautifulSoup.
+
+    404 is treated as the end of pagination.
+    Temporary failures are retried.
+    """
+
+    for attempt in range(1, retries + 1):
+
+        try:
+            response = SESSION.get(
+                url,
+                timeout=REQUEST_TIMEOUT,
             )
 
-    # At least one strong technical development signal
-    # is required for a generic-title listing.
-    if strong_description_matches:
-        return True
+            if response.status_code == 404:
+                print(
+                    f"      ↳ Page does not exist (404): {url}"
+                )
+                return None
 
-    return False
+            response.raise_for_status()
 
+            return BeautifulSoup(
+                response.text,
+                "html.parser",
+            )
 
-# ============================================================
-# ARTICLE EXTRACTION
-# ============================================================
+        except requests.exceptions.HTTPError as error:
 
-def extract_job_article(soup):
-    """
-    Return the main BrighterMonday job article.
+            status_code = getattr(
+                error.response,
+                "status_code",
+                None,
+            )
 
-    BrighterMonday commonly places job information inside:
+            if status_code == 404:
+                print(
+                    f"      ↳ Page does not exist (404): {url}"
+                )
+                return None
 
-        <article class="job__details">
+            if attempt >= retries:
+                print(
+                    f"      ↳ Request failed: {error}"
+                )
+                return None
 
-    Multiple fallbacks are included in case the markup changes.
-    """
+            delay = RETRY_DELAYS[
+                min(
+                    attempt - 1,
+                    len(RETRY_DELAYS) - 1,
+                )
+            ]
 
-    if not soup:
-        return None
+            print(
+                f"      ↳ Request attempt "
+                f"{attempt}/{retries} failed; "
+                f"retrying in {delay}s..."
+            )
 
-    # Primary selector.
-    article = soup.find(
-        "article",
-        class_="job__details",
-    )
+            time.sleep(delay)
 
-    if article:
-        return article
+        except requests.exceptions.RequestException as error:
 
-    # Other possible class names.
-    selectors = [
-        "article.job-details",
-        "article.job__detail",
-        ".job__details",
-        ".job-details",
-        "[class*='job__details']",
-        "[class*='job-details']",
-    ]
+            if attempt >= retries:
+                print(
+                    f"      ↳ Request failed: {error}"
+                )
+                return None
 
-    for selector in selectors:
+            delay = RETRY_DELAYS[
+                min(
+                    attempt - 1,
+                    len(RETRY_DELAYS) - 1,
+                )
+            ]
 
-        article = soup.select_one(
-            selector
-        )
+            print(
+                f"      ↳ Request attempt "
+                f"{attempt}/{retries} failed; "
+                f"retrying in {delay}s..."
+            )
 
-        if article:
-            return article
-
-    # Generic article fallback.
-    article = soup.find(
-        "article"
-    )
-
-    if article:
-        return article
+            time.sleep(delay)
 
     return None
 
 
-def extract_text_lines(article):
-    """
-    Return cleaned non-empty text lines from an article.
-    """
+# ============================================================
+# JOB URL DETECTION
+# ============================================================
 
-    if not article:
-        return []
+def is_job_url(url: str) -> bool:
+    """Determine whether URL looks like a BrighterMonday job."""
 
-    lines = []
+    if not url:
+        return False
 
-    raw_lines = article.get_text(
-        "\n",
-        strip=True,
-    ).splitlines()
+    parsed = urlparse(url)
 
-    for line in raw_lines:
+    if parsed.netloc:
+        hostname = parsed.netloc.lower()
 
-        cleaned = clean_text(
-            line
+        if hostname not in {
+            "brightermonday.co.ke",
+            "www.brightermonday.co.ke",
+        }:
+            return False
+
+    return "/listings/" in parsed.path.lower()
+
+
+# ============================================================
+# LISTING EXTRACTION
+# ============================================================
+
+def extract_listing_url(card) -> str:
+    """Extract job URL from a listing card."""
+
+    for link in card.select("a[href]"):
+
+        href = normalize_url(
+            link.get("href", "")
         )
 
-        if cleaned:
-            lines.append(
-                cleaned
-            )
+        if is_job_url(href):
+            return href
 
-    return lines
+    return ""
 
 
-# ============================================================
-# METADATA EXTRACTION
-# ============================================================
+def extract_listing_title(card) -> str:
+    """Extract title from a listing card."""
 
-def extract_value_between_labels(
-    text,
-    start_label,
-    end_labels,
-):
-    """
-    Extract text appearing between two metadata labels.
+    selectors = [
+        "h2",
+        "h3",
+        "h4",
+        "[class*='title']",
+        "a[href]",
+    ]
 
-    Example:
-
-        Min Qualification: Diploma
-        Experience Level: Mid level
-
-    returns:
-
-        Diploma
-    """
-
-    if not text:
-        return ""
-
-    end_pattern = "|".join(
-        re.escape(label)
-        for label in end_labels
-    )
-
-    pattern = (
-        rf"{re.escape(start_label)}"
-        rf"\s*:?\s*"
-        rf"(.*?)"
-        rf"(?=\s+(?:{end_pattern})\s*:|\Z)"
-    )
-
-    match = re.search(
-        pattern,
-        text,
-        re.IGNORECASE,
-    )
-
-    if not match:
-        return ""
-
-    return clean_text(
-        match.group(1)
-    )
-
-
-def extract_metadata(article):
-    """
-    Extract structured metadata from a BrighterMonday
-    job article.
-
-    Returns:
-
-        qualification
-        experience
-        experience_length
-        location
-        job_type
-        posted
-        deadline
-    """
-
-    metadata = {
-        "qualification": "",
-        "experience": "",
-        "experience_length": "",
-        "location": "",
-        "job_type": "",
-        "posted": "",
-        "deadline": "",
+    ignored_titles = {
+        "view job",
+        "apply now",
+        "see more",
+        "read more",
     }
 
-    if not article:
-        return metadata
+    for selector in selectors:
 
-    text = clean_text(
-        article.get_text(
-            " ",
-            strip=True,
-        )
-    )
+        for element in card.select(selector):
 
-    # --------------------------------------------------------
-    # Qualification
-    # --------------------------------------------------------
-
-    metadata["qualification"] = (
-        extract_value_between_labels(
-            text,
-            "Min Qualification",
-            [
-                "Experience Level",
-                "Experience Length",
-                "Language Requirement",
-                "Working Hours",
-                "Applicant Location",
-                "Job descriptions",
-            ],
-        )
-    )
-
-    # --------------------------------------------------------
-    # Experience level
-    # --------------------------------------------------------
-
-    metadata["experience"] = (
-        extract_value_between_labels(
-            text,
-            "Experience Level",
-            [
-                "Experience Length",
-                "Language Requirement",
-                "Working Hours",
-                "Applicant Location",
-                "Job descriptions",
-            ],
-        )
-    )
-
-    # --------------------------------------------------------
-    # Experience length
-    # --------------------------------------------------------
-
-    metadata["experience_length"] = (
-        extract_value_between_labels(
-            text,
-            "Experience Length",
-            [
-                "Language Requirement",
-                "Working Hours",
-                "Applicant Location",
-                "Job descriptions",
-                "How to Apply",
-            ],
-        )
-    )
-
-    # --------------------------------------------------------
-    # Working hours / job type
-    # --------------------------------------------------------
-
-    metadata["job_type"] = (
-        extract_value_between_labels(
-            text,
-            "Working Hours",
-            [
-                "Applicant Location",
-                "Job descriptions",
-                "How to Apply",
-            ],
-        )
-    )
-
-    # --------------------------------------------------------
-    # Applicant location
-    # --------------------------------------------------------
-
-    metadata["location"] = (
-        extract_value_between_labels(
-            text,
-            "Applicant Location",
-            [
-                "Job descriptions",
-                "How to Apply",
-                "Application Deadline",
-                "Deadline",
-                "Closing Date",
-            ],
-        )
-    )
-
-    # --------------------------------------------------------
-    # Posted date
-    # --------------------------------------------------------
-
-    posted_patterns = [
-        r"\b\d+\s+(?:day|days|hour|hours|minute|minutes)\s+ago\b",
-        r"\btoday\b",
-        r"\byesterday\b",
-    ]
-
-    for pattern in posted_patterns:
-
-        posted_match = re.search(
-            pattern,
-            text,
-            re.IGNORECASE,
-        )
-
-        if posted_match:
-
-            metadata["posted"] = clean_text(
-                posted_match.group(0)
-            )
-
-            break
-
-    # --------------------------------------------------------
-    # Application deadline
-    # --------------------------------------------------------
-
-    deadline_patterns = [
-        (
-            r"Application Deadline\s*:?\s*(.*?)"
-            r"(?=\s+(?:How to Apply|Share This Job|"
-            r"Similar Jobs|Related Jobs)|$)"
-        ),
-        (
-            r"Deadline\s*:?\s*(.*?)"
-            r"(?=\s+(?:How to Apply|Share This Job|"
-            r"Similar Jobs|Related Jobs)|$)"
-        ),
-        (
-            r"Closing Date\s*:?\s*(.*?)"
-            r"(?=\s+(?:How to Apply|Share This Job|"
-            r"Similar Jobs|Related Jobs)|$)"
-        ),
-    ]
-
-    for pattern in deadline_patterns:
-
-        match = re.search(
-            pattern,
-            text,
-            re.IGNORECASE,
-        )
-
-        if match:
-
-            deadline = clean_text(
-                match.group(1)
-            )
-
-            if deadline:
-
-                metadata["deadline"] = (
-                    deadline
-                )
-
-                break
-
-    return metadata
-
-
-# ============================================================
-# TITLE / COMPANY
-# ============================================================
-
-def extract_title(soup):
-    """
-    Extract the job title from the page.
-    """
-
-    if not soup:
-        return ""
-
-    heading = soup.find(
-        "h1"
-    )
-
-    if not heading:
-        # Fallback to page title.
-        page_title = soup.find(
-            "title"
-        )
-
-        if page_title:
-            title = clean_text(
-                page_title.get_text(
+            text = clean_text(
+                element.get_text(
                     " ",
                     strip=True,
                 )
             )
 
-            # Remove common site suffix.
-            title = re.sub(
-                r"\s*\|\s*BrighterMonday.*$",
-                "",
-                title,
-                flags=re.IGNORECASE,
+            if len(text) < 3:
+                continue
+
+            if text.lower() in ignored_titles:
+                continue
+
+            return text
+
+    return ""
+
+
+def find_listing_cards(
+    soup: BeautifulSoup,
+) -> List:
+    """Find probable job cards."""
+
+    selectors = [
+        "div.job-card",
+        "article.job-card",
+        "div[class*='job-card']",
+        "article[class*='job']",
+        "div[class*='listing']",
+        "article",
+    ]
+
+    cards = []
+
+    seen_urls = set()
+
+    for selector in selectors:
+
+        for card in soup.select(selector):
+
+            url = extract_listing_url(card)
+
+            if not url:
+                continue
+
+            if url in seen_urls:
+                continue
+
+            seen_urls.add(url)
+
+            cards.append(card)
+
+    return cards
+
+
+def extract_listings_from_page(
+    soup: BeautifulSoup,
+) -> List[Dict[str, str]]:
+    """Extract basic listings."""
+
+    listings = []
+
+    seen_urls = set()
+
+    cards = find_listing_cards(soup)
+
+    for card in cards:
+
+        url = extract_listing_url(card)
+
+        if not url:
+            continue
+
+        if url in seen_urls:
+            continue
+
+        title = extract_listing_title(card)
+
+        if not title:
+            continue
+
+        seen_urls.add(url)
+
+        listings.append(
+            {
+                "title": title,
+                "url": url,
+            }
+        )
+
+    # Fallback if card detection fails.
+    if not listings:
+
+        for link in soup.select("a[href]"):
+
+            url = normalize_url(
+                link.get("href", "")
             )
 
-            return title.strip()
+            if not is_job_url(url):
+                continue
 
-        return ""
+            title = clean_text(
+                link.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
 
-    return clean_text(
-        heading.get_text(
-            " ",
-            strip=True,
+            if len(title) < 3:
+                continue
+
+            if title.lower() in {
+                "view job",
+                "apply now",
+                "see more",
+                "read more",
+            }:
+                continue
+
+            if url in seen_urls:
+                continue
+
+            seen_urls.add(url)
+
+            listings.append(
+                {
+                    "title": title,
+                    "url": url,
+                }
+            )
+
+    return listings
+
+
+# ============================================================
+# SEARCH COLLECTION
+# ============================================================
+
+def collect_search_results(
+    search_url: str,
+) -> List[Dict[str, str]]:
+    """Collect listings from one search URL."""
+
+    listings = []
+
+    seen_urls = set()
+
+    for page in range(1, MAX_PAGES + 1):
+
+        url = page_url(
+            search_url,
+            page,
         )
+
+        soup = get_page(url)
+
+        if soup is None:
+            break
+
+        page_listings = extract_listings_from_page(
+            soup
+        )
+
+        if not page_listings:
+            break
+
+        new_count = 0
+
+        for listing in page_listings:
+
+            job_url = listing.get(
+                "url",
+                "",
+            )
+
+            if not job_url:
+                continue
+
+            if job_url in seen_urls:
+                continue
+
+            seen_urls.add(job_url)
+
+            listings.append(listing)
+
+            new_count += 1
+
+        if new_count == 0:
+            break
+
+        time.sleep(REQUEST_DELAY)
+
+    return listings
+
+
+# ============================================================
+# TECHNOLOGY FILTER
+# ============================================================
+
+def title_is_excluded(title: str) -> bool:
+    """Return True if title clearly belongs to an excluded category."""
+
+    normalized = normalize_title(title)
+
+    if not normalized:
+        return True
+
+    for pattern in EXCLUDED_TITLE_PATTERNS:
+
+        if re.search(
+            pattern,
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+    return False
+
+
+def title_matches_technology(title: str) -> bool:
+    """
+    Return True when the title clearly indicates a
+    technology-related position.
+    """
+
+    normalized = normalize_title(title)
+
+    if not normalized:
+        return False
+
+    if title_is_excluded(normalized):
+        return False
+
+    for pattern in TECH_TITLE_PATTERNS:
+
+        if re.search(
+            pattern,
+            normalized,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+    return False
+
+
+def description_matches_technology(
+    title: str,
+    description: str,
+) -> bool:
+    """
+    Conservative description-based technology detection.
+
+    An ambiguous title must have at least two independent
+    technical keyword groups.
+    """
+
+    if title_is_excluded(title):
+        return False
+
+    description = clean_text(
+        description
+    ).lower()
+
+    if not description:
+        return False
+
+    matched_groups = 0
+
+    for group in TECHNOLOGY_KEYWORD_GROUPS:
+
+        if any(
+            keyword in description
+            for keyword in group
+        ):
+            matched_groups += 1
+
+    return matched_groups >= 2
+
+
+def is_technology_job(
+    title: str,
+    description: str = "",
+) -> bool:
+    """Determine whether job is technology-related."""
+
+    if title_is_excluded(title):
+        return False
+
+    if title_matches_technology(title):
+        return True
+
+    return description_matches_technology(
+        title,
+        description,
     )
 
 
-def extract_company(article):
+# ============================================================
+# JSON-LD HELPERS
+# ============================================================
+
+def get_json_ld_objects(
+    soup: BeautifulSoup,
+) -> List[dict]:
     """
-    Extract company name from the job article.
+    Extract JSON-LD objects from the page.
 
-    Several strategies are attempted before falling back
-    to nearby text.
+    Handles dictionaries, lists and @graph structures.
     """
 
-    if not article:
-        return ""
+    objects = []
 
-    # --------------------------------------------------------
-    # Strategy 1: Known company-related selectors
-    # --------------------------------------------------------
+    for script in soup.select(
+        "script[type='application/ld+json']"
+    ):
 
-    company_selectors = [
-        ".job__company",
-        ".company-name",
-        ".company",
-        ".job-company",
-        "[class*='company']",
+        raw = script.string or script.get_text()
+
+        if not raw:
+            continue
+
+        raw = raw.strip()
+
+        if not raw:
+            continue
+
+        try:
+            data = json.loads(raw)
+
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        if isinstance(data, list):
+
+            for item in data:
+
+                if isinstance(item, dict):
+                    objects.append(item)
+
+        elif isinstance(data, dict):
+
+            objects.append(data)
+
+            graph = data.get("@graph")
+
+            if isinstance(graph, list):
+
+                for item in graph:
+
+                    if isinstance(item, dict):
+                        objects.append(item)
+
+    return objects
+
+
+def get_job_posting_json_ld(
+    soup: BeautifulSoup,
+) -> List[dict]:
+    """Return only JSON-LD JobPosting objects."""
+
+    job_postings = []
+
+    for data in get_json_ld_objects(soup):
+
+        schema_type = data.get("@type")
+
+        if isinstance(schema_type, list):
+
+            if "JobPosting" in schema_type:
+                job_postings.append(data)
+
+        elif schema_type == "JobPosting":
+
+            job_postings.append(data)
+
+    return job_postings
+
+
+# ============================================================
+# LABEL EXTRACTION
+# ============================================================
+
+def extract_text_by_label(
+    soup: BeautifulSoup,
+    labels: List[str],
+) -> str:
+    """
+    Extract a value associated with a label.
+
+    Supports:
+        - definition lists
+        - tables
+        - nearby elements
+        - text/sibling structures
+    """
+
+    expected_labels = [
+        clean_text(label).lower()
+        for label in labels
     ]
 
-    for selector in company_selectors:
+    # --------------------------------------------------------
+    # Strategy 1: definition lists
+    # --------------------------------------------------------
 
-        element = article.select_one(
-            selector
+    for dt in soup.select("dt"):
+
+        label = clean_text(
+            dt.get_text(
+                " ",
+                strip=True,
+            )
+        ).lower()
+
+        if not label:
+            continue
+
+        if any(
+            expected == label
+            or expected in label
+            for expected in expected_labels
+        ):
+
+            dd = dt.find_next_sibling("dd")
+
+            if dd:
+
+                value = clean_text(
+                    dd.get_text(
+                        " ",
+                        strip=True,
+                    )
+                )
+
+                if value:
+                    return value
+
+    # --------------------------------------------------------
+    # Strategy 2: tables
+    # --------------------------------------------------------
+
+    for row in soup.select("tr"):
+
+        cells = row.select("th, td")
+
+        if len(cells) < 2:
+            continue
+
+        label = clean_text(
+            cells[0].get_text(
+                " ",
+                strip=True,
+            )
+        ).lower()
+
+        value = clean_text(
+            cells[1].get_text(
+                " ",
+                strip=True,
+            )
         )
+
+        if any(
+            expected == label
+            or expected in label
+            for expected in expected_labels
+        ):
+
+            if value:
+                return value
+
+    # --------------------------------------------------------
+    # Strategy 3: exact text label + sibling
+    # --------------------------------------------------------
+
+    for element in soup.find_all(string=True):
+
+        text = clean_text(str(element))
+
+        if not text:
+            continue
+
+        lower_text = text.lower()
+
+        if lower_text not in expected_labels:
+            continue
+
+        parent = element.parent
+
+        if not parent:
+            continue
+
+        sibling = parent.find_next_sibling()
+
+        if sibling:
+
+            value = clean_text(
+                sibling.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if (
+                value
+                and value.lower()
+                not in expected_labels
+            ):
+                return value
+
+    return ""
+
+
+# ============================================================
+# COMPANY EXTRACTION
+# ============================================================
+
+def extract_company(
+    soup: BeautifulSoup,
+) -> str:
+    """
+    Extract employer/company name.
+
+    The order is important:
+
+    1. JobPosting JSON-LD
+    2. Explicit company selectors
+    3. Company/employer labels
+    4. Job-page heading structure
+    5. Meta tags
+    6. Safe fallback
+
+    Never return generic values such as "Employers".
+    """
+
+    invalid_values = {
+        "",
+        "brightermonday",
+        "brighter monday",
+        "anonymous employer",
+        "unknown company",
+        "unknown employer",
+        "employer",
+        "employers",
+        "company",
+        "companies",
+        "email address",
+        "notify me",
+        "sign in",
+        "login",
+        "confidential",
+    }
+
+    def valid_company(value: str) -> bool:
+        value = clean_value(value)
+
+        if not value:
+            return False
+
+        lower = value.lower()
+
+        if lower in invalid_values:
+            return False
+
+        blocked_phrases = [
+            "brightermonday",
+            "email address",
+            "notify me",
+            "read our",
+            "protection of your data",
+            "sign in",
+            "log in",
+            "job alert",
+            "search jobs",
+            "filter results",
+        ]
+
+        if any(
+            phrase in lower
+            for phrase in blocked_phrases
+        ):
+            return False
+
+        if len(value) > 150:
+            return False
+
+        if len(value.split()) > 15:
+            return False
+
+        return True
+
+    # --------------------------------------------------------
+    # Strategy 1: JobPosting JSON-LD
+    # --------------------------------------------------------
+
+    for data in get_job_posting_json_ld(soup):
+
+        organization = data.get(
+            "hiringOrganization"
+        )
+
+        if isinstance(organization, dict):
+
+            company = organization.get(
+                "name",
+                "",
+            )
+
+            if valid_company(company):
+                return clean_value(company)
+
+        elif isinstance(organization, str):
+
+            if valid_company(organization):
+                return clean_value(organization)
+
+    # --------------------------------------------------------
+    # Strategy 2: Explicit company selectors
+    # --------------------------------------------------------
+
+    selectors = [
+        "[data-testid*='company']",
+        "[data-testid*='employer']",
+        "[class*='company-name']",
+        "[class*='company_name']",
+        "[class*='companyName']",
+        "[class*='employer-name']",
+        "[class*='employer_name']",
+        "[class*='employerName']",
+    ]
+
+    for selector in selectors:
+
+        for element in soup.select(selector):
+
+            value = clean_text(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if valid_company(value):
+                return clean_value(value)
+
+    # --------------------------------------------------------
+    # Strategy 3: Look for company/employer labels.
+    # --------------------------------------------------------
+
+    company = extract_text_by_label(
+        soup,
+        [
+            "company",
+            "employer",
+            "organisation",
+            "organization",
+        ],
+    )
+
+    if valid_company(company):
+        return clean_value(company)
+
+    # --------------------------------------------------------
+    # Strategy 4: Job page heading structure.
+    #
+    # Current BrighterMonday pages place the employer
+    # immediately around the main job heading.
+    # --------------------------------------------------------
+
+    title_element = soup.find("h1")
+
+    if title_element:
+
+        # Look at the next few siblings/elements.
+        candidates = []
+
+        for element in title_element.find_all_next(
+            limit=10
+        ):
+
+            if element.name not in {
+                "h2",
+                "h3",
+                "a",
+                "span",
+                "div",
+            }:
+                continue
+
+            text = clean_text(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if not text:
+                continue
+
+            if text.lower() == normalize_title(
+                extract_title(soup)
+            ):
+                continue
+
+            candidates.append(text)
+
+        for candidate in candidates:
+
+            if valid_company(candidate):
+
+                # Avoid accidentally selecting category names.
+                lower = candidate.lower()
+
+                if lower in {
+                    "software & data",
+                    "software and data",
+                    "full time",
+                    "part time",
+                    "internship & graduate",
+                    "nairobi",
+                    "kenya",
+                    "confidential",
+                }:
+                    continue
+
+                return clean_value(candidate)
+
+    # --------------------------------------------------------
+    # Strategy 5: Meta tags
+    # --------------------------------------------------------
+
+    meta_selectors = [
+        "meta[name='author']",
+        "meta[name='company']",
+        "meta[name='employer']",
+        "meta[property='article:author']",
+    ]
+
+    for selector in meta_selectors:
+
+        element = soup.select_one(selector)
 
         if not element:
             continue
 
-        company = clean_text(
-            element.get_text(
-                " ",
-                strip=True,
+        value = clean_text(
+            element.get(
+                "content",
+                "",
             )
         )
 
-        if (
-            company
-            and len(company) <= 150
-        ):
-            return company
+        if valid_company(value):
+            return clean_value(value)
 
     # --------------------------------------------------------
-    # Strategy 2: Look for explicit company labels.
+    # Strategy 6: Page text patterns
     # --------------------------------------------------------
 
-    lines = extract_text_lines(
-        article
+    page_text = soup.get_text(
+        "\n",
+        strip=True,
     )
 
-    company_labels = {
-        "company",
-        "employer",
-        "company name",
-    }
+    patterns = [
+        r"(?:company|employer)\s*:\s*([^\n|]+)",
+        r"(?:company|employer)\s*\n\s*([^\n|]+)",
+    ]
 
-    for index, line in enumerate(lines):
+    for pattern in patterns:
 
-        normalized = normalize_text(
-            line
+        matches = re.finditer(
+            pattern,
+            page_text,
+            flags=re.IGNORECASE,
         )
 
-        if normalized in company_labels:
+        for match in matches:
 
-            if index + 1 < len(lines):
+            value = clean_text(
+                match.group(1)
+            )
 
-                company = clean_text(
-                    lines[index + 1]
+            if valid_company(value):
+                return clean_value(value)
+
+    return "Unknown Company"
+
+
+# ============================================================
+# TITLE
+# ============================================================
+
+def extract_title(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract full job title."""
+
+    selectors = [
+        "h1",
+        "[data-testid*='job-title']",
+        "[class*='job-title']",
+        "[class*='job_title']",
+        "meta[property='og:title']",
+    ]
+
+    for selector in selectors:
+
+        element = soup.select_one(selector)
+
+        if not element:
+            continue
+
+        if element.name == "meta":
+
+            value = clean_text(
+                element.get(
+                    "content",
+                    "",
                 )
-
-                if (
-                    company
-                    and len(company) <= 150
-                ):
-                    return company
-
-    # --------------------------------------------------------
-    # Strategy 3: Look at lines after title.
-    # --------------------------------------------------------
-
-    heading = article.find(
-        "h1"
-    )
-
-    title = ""
-
-    if heading:
-
-        title = clean_text(
-            heading.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-    if title in lines:
-
-        title_index = lines.index(
-            title
-        )
-
-        ignored_values = {
-            "sales",
-            "real estate",
-            "software & data",
-            "engineering & technology",
-            "technology",
-            "nairobi",
-            "mombasa",
-            "kisumu",
-            "nakuru",
-            "eldoret",
-            "kenya",
-            "full time",
-            "full-time",
-            "part time",
-            "part-time",
-            "contract",
-            "internship",
-            "temporary",
-            "easy apply",
-            "featured",
-            "new",
-        }
-
-        for line in lines[
-            title_index + 1:
-            title_index + 8
-        ]:
-
-            lower = normalize_text(
-                line
             )
 
-            if lower in ignored_values:
-                continue
+        else:
 
-            if "ago" in lower:
-                continue
+            value = clean_text(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
 
-            if "share" in lower:
-                continue
+        if not value:
+            continue
 
-            if (
-                "qualification" in lower
-                or "experience level" in lower
-                or "experience length" in lower
-            ):
-                continue
+        value = clean_value(value)
 
-            if len(line) <= 100:
-
-                return line
+        return value
 
     return ""
 
@@ -1012,310 +1448,633 @@ def extract_company(article):
 # DESCRIPTION
 # ============================================================
 
-def extract_description(article):
-    """
-    Extract the actual job description and requirements.
+def extract_description(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract the main job description."""
 
-    Starts after:
+    # First preference: JSON-LD JobPosting.
+    for data in get_job_posting_json_ld(soup):
 
-        Job descriptions & requirements
-
-    and stops at common unrelated sections.
-    """
-
-    if not article:
-        return ""
-
-    lines = extract_text_lines(
-        article
-    )
-
-    start_index = None
-
-    # --------------------------------------------------------
-    # Locate description heading.
-    # --------------------------------------------------------
-
-    exact_headings = {
-        "job descriptions & requirements",
-        "job description & requirements",
-        "job description and requirements",
-        "job description",
-        "job descriptions",
-    }
-
-    for index, line in enumerate(lines):
-
-        normalized = normalize_text(
-            line
-        )
-
-        if normalized in exact_headings:
-
-            start_index = index + 1
-
-            break
-
-    # --------------------------------------------------------
-    # Fallback: partial heading match.
-    # --------------------------------------------------------
-
-    if start_index is None:
-
-        for index, line in enumerate(lines):
-
-            normalized = normalize_text(
-                line
-            )
-
-            if (
-                "job description" in normalized
-                and "requirement" in normalized
-            ):
-
-                start_index = index + 1
-
-                break
-
-    if start_index is None:
-        return ""
-
-    # --------------------------------------------------------
-    # Extract until unrelated section.
-    # --------------------------------------------------------
-
-    description_lines = []
-
-    stop_headings = {
-        "how to apply",
-        "application deadline",
-        "share this job",
-        "similar jobs",
-        "related jobs",
-        "report this job",
-        "important safety tips",
-        "log in and apply",
-    }
-
-    for line in lines[start_index:]:
-
-        normalized = normalize_text(
-            line
-        )
-
-        if normalized in stop_headings:
-            break
-
-        if normalized.startswith(
-            "application deadline"
-        ):
-            break
-
-        if normalized.startswith(
-            "how to apply"
-        ):
-            break
-
-        description_lines.append(
-            line
-        )
-
-    return "\n".join(
-        description_lines
-    ).strip()
-
-
-# ============================================================
-# JOB DETAILS
-# ============================================================
-
-def get_job_details(job_url):
-    """
-    Extract structured information from a BrighterMonday
-    job page.
-    """
-
-    soup = get_page(
-        job_url
-    )
-
-    article = extract_job_article(
-        soup
-    )
-
-    title = extract_title(
-        soup
-    )
-
-    metadata = extract_metadata(
-        article
-    )
-
-    company = extract_company(
-        article
-    )
-
-    description = extract_description(
-        article
-    )
-
-    return {
-        "title": title,
-        "company": company,
-        "location": metadata["location"],
-        "job_type": metadata["job_type"],
-        "qualification": metadata["qualification"],
-        "experience": metadata["experience"],
-        "experience_length": metadata[
-            "experience_length"
-        ],
-        "posted": metadata["posted"],
-        "deadline": metadata["deadline"],
-        "description": description,
-        "url": job_url,
-        "source": "BrighterMonday",
-    }
-
-
-# ============================================================
-# COLLECTION
-# ============================================================
-
-def collect_jobs(listing_url):
-    """
-    Collect technology-related job listings from BrighterMonday.
-
-    The listing page may contain many non-technology jobs.
-
-    Candidate listings are therefore handled in two stages:
-
-        1. Strong technology titles are accepted immediately.
-        2. Generic titles are inspected individually.
-
-    Only jobs that appear technology-related are returned.
-    """
-
-    soup = get_page(
-        listing_url
-    )
-
-    candidate_jobs = []
-    seen_urls = set()
-
-    # --------------------------------------------------------
-    # Find candidate job links.
-    # --------------------------------------------------------
-
-    for link in soup.find_all(
-        "a",
-        href=True,
-    ):
-
-        href = link.get(
-            "href",
+        description = data.get(
+            "description",
             "",
         )
 
-        if "/listings/" not in href:
-            continue
+        if isinstance(description, str):
 
-        job_url = urljoin(
-            BASE_URL,
-            href,
+            description = BeautifulSoup(
+                description,
+                "html.parser",
+            ).get_text(
+                " ",
+                strip=True,
+            )
+
+            description = clean_text(description)
+
+            if len(description) >= 100:
+                return description
+
+    selectors = [
+        "[data-testid*='description']",
+        "[class*='job-description']",
+        "[class*='job_description']",
+    ]
+
+    candidates = []
+
+    for selector in selectors:
+
+        for element in soup.select(selector):
+
+            text = clean_text(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if len(text) >= 200:
+                candidates.append(text)
+
+    if candidates:
+        return max(
+            candidates,
+            key=len,
         )
 
-        # Remove fragments.
-        job_url = job_url.split(
-            "#"
-        )[0]
+    # Article is a reasonable fallback, but avoid grabbing
+    # the entire page unless absolutely necessary.
+    article = soup.find("article")
 
-        if job_url in seen_urls:
-            continue
+    if article:
 
-        title = clean_text(
-            link.get_text(
+        text = clean_text(
+            article.get_text(
                 " ",
                 strip=True,
             )
         )
 
-        if not title:
-            continue
+        if len(text) >= 200:
+            return text
 
-        seen_urls.add(
-            job_url
+    return ""
+
+
+# ============================================================
+# LOCATION
+# ============================================================
+
+def extract_location(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract job location."""
+
+    # JSON-LD is the cleanest source.
+    for data in get_job_posting_json_ld(soup):
+
+        location_data = data.get(
+            "jobLocation"
         )
 
-        candidate_jobs.append({
-            "title": title,
-            "url": job_url,
-        })
+        if isinstance(location_data, list):
 
-    print(
-        f"   Found {len(candidate_jobs)} candidate listings"
+            for item in location_data:
+
+                if not isinstance(item, dict):
+                    continue
+
+                address = item.get(
+                    "address"
+                )
+
+                if isinstance(address, dict):
+
+                    parts = [
+                        address.get(
+                            "addressLocality",
+                            "",
+                        ),
+                        address.get(
+                            "addressRegion",
+                            "",
+                        ),
+                        address.get(
+                            "addressCountry",
+                            "",
+                        ),
+                    ]
+
+                    parts = [
+                        clean_text(part)
+                        for part in parts
+                        if clean_text(part)
+                    ]
+
+                    if parts:
+                        return ", ".join(parts)
+
+        elif isinstance(location_data, dict):
+
+            address = location_data.get(
+                "address"
+            )
+
+            if isinstance(address, dict):
+
+                parts = [
+                    address.get(
+                        "addressLocality",
+                        "",
+                    ),
+                    address.get(
+                        "addressRegion",
+                        "",
+                    ),
+                    address.get(
+                        "addressCountry",
+                        "",
+                    ),
+                ]
+
+                parts = [
+                    clean_text(part)
+                    for part in parts
+                    if clean_text(part)
+                ]
+
+                if parts:
+                    return ", ".join(parts)
+
+    location = extract_text_by_label(
+        soup,
+        [
+            "location",
+            "job location",
+            "where",
+        ],
     )
 
+    if location:
+        return clean_value(location)
+
+    # Look for common BrighterMonday location text.
+    text = soup.get_text(
+        " ",
+        strip=True,
+    )
+
+    patterns = [
+        r"\b(Nairobi|Mombasa|Kisumu|Nakuru|Thika|Eldoret|Kenya)\b"
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return clean_text(
+                match.group(1)
+            )
+
+    return ""
+
+
+# ============================================================
+# JOB TYPE
+# ============================================================
+
+def extract_job_type(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract employment type."""
+
+    for data in get_job_posting_json_ld(soup):
+
+        value = data.get(
+            "employmentType"
+        )
+
+        if isinstance(value, list):
+
+            return ", ".join(
+                clean_text(item)
+                for item in value
+                if clean_text(item)
+            )
+
+        if isinstance(value, str) and value.strip():
+
+            return clean_text(value)
+
+    return extract_text_by_label(
+        soup,
+        [
+            "job type",
+            "employment type",
+            "employment",
+            "type",
+        ],
+    )
+
+
+# ============================================================
+# QUALIFICATION
+# ============================================================
+
+def extract_qualification(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract qualification."""
+
+    return extract_text_by_label(
+        soup,
+        [
+            "qualification",
+            "qualifications",
+            "education",
+            "minimum qualification",
+            "min qualification",
+        ],
+    )
+
+
+# ============================================================
+# EXPERIENCE
+# ============================================================
+
+def extract_experience(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract experience level."""
+
+    return extract_text_by_label(
+        soup,
+        [
+            "experience level",
+            "experience",
+        ],
+    )
+
+
+def extract_experience_length(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract required experience length."""
+
+    for data in get_job_posting_json_ld(soup):
+
+        value = data.get(
+            "experienceRequirements"
+        )
+
+        if isinstance(value, dict):
+
+            text = value.get(
+                "monthsOfExperience"
+            )
+
+            if text:
+                return str(text)
+
+        if isinstance(value, str):
+
+            value = clean_text(value)
+
+            if value:
+                return value
+
+    return extract_text_by_label(
+        soup,
+        [
+            "experience length",
+            "years of experience",
+            "years experience",
+            "experience required",
+        ],
+    )
+
+
+# ============================================================
+# POSTED DATE
+# ============================================================
+
+def extract_posted(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract posted date."""
+
+    for data in get_job_posting_json_ld(soup):
+
+        value = data.get(
+            "datePosted"
+        )
+
+        if isinstance(value, str):
+
+            return clean_text(value)
+
+    return extract_text_by_label(
+        soup,
+        [
+            "posted",
+            "date posted",
+            "date",
+        ],
+    )
+
+
+# ============================================================
+# DEADLINE
+# ============================================================
+
+def extract_deadline(
+    soup: BeautifulSoup,
+) -> str:
+    """Extract application deadline."""
+
+    for data in get_job_posting_json_ld(soup):
+
+        value = data.get(
+            "validThrough"
+        )
+
+        if isinstance(value, str):
+
+            return clean_text(value)
+
+    return extract_text_by_label(
+        soup,
+        [
+            "deadline",
+            "application deadline",
+            "closing date",
+        ],
+    )
+
+
+# ============================================================
+# GET JOB DETAILS
+# ============================================================
+
+def get_job_details(
+    url: str,
+) -> Dict[str, str]:
+    """
+    Fetch and parse a complete BrighterMonday job.
+
+    Returns a dictionary compatible with the existing
+    job matcher and tracker.
+    """
+
+    url = normalize_url(url)
+
+    if not url:
+        raise ValueError(
+            "Invalid BrighterMonday job URL."
+        )
+
+    soup = get_page(url)
+
+    if soup is None:
+
+        raise RuntimeError(
+            f"Could not fetch job page: {url}"
+        )
+
+    title = extract_title(soup)
+
+    company = extract_company(soup)
+
+    location = extract_location(soup)
+
+    job_type = extract_job_type(soup)
+
+    qualification = extract_qualification(soup)
+
+    experience = extract_experience(soup)
+
+    experience_length = extract_experience_length(
+        soup
+    )
+
+    posted = extract_posted(soup)
+
+    deadline = extract_deadline(soup)
+
+    description = extract_description(soup)
+
+    time.sleep(DETAIL_DELAY)
+
+    return {
+        "title": title,
+        "company": company,
+        "location": location,
+        "job_type": job_type,
+        "qualification": qualification,
+        "experience": experience,
+        "experience_length": experience_length,
+        "years_required": experience_length,
+        "posted": posted,
+        "deadline": deadline,
+        "description": description,
+        "url": url,
+        "source": "BrighterMonday",
+    }
+
+
+# ============================================================
+# COLLECT JOBS
+# ============================================================
+
+def collect_jobs(
+    listing_url: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """
+    Collect BrighterMonday technology jobs.
+
+    listing_url is retained for compatibility with the
+    existing job_collector.py.
+    """
+
+    print(
+        "Collecting BrighterMonday jobs..."
+    )
+
+    search_urls = list(SEARCH_URLS)
+
+    # Add custom listing URL if supplied.
+    if listing_url:
+
+        listing_url = normalize_url(
+            listing_url
+        )
+
+        if (
+            listing_url
+            and listing_url not in search_urls
+        ):
+
+            search_urls.insert(
+                0,
+                listing_url,
+            )
+
     # --------------------------------------------------------
-    # Inspect candidate listings.
+    # Collect candidate listings.
     # --------------------------------------------------------
 
-    technology_jobs = []
-    filtered_count = 0
+    all_listings = []
 
-    for index, candidate in enumerate(
-        candidate_jobs,
+    seen_urls = set()
+
+    print(
+        f"   Running {len(search_urls)} "
+        f"BrighterMonday category searches"
+    )
+
+    for index, search_url in enumerate(
+        search_urls,
         start=1,
     ):
 
-        title = candidate["title"]
-        url = candidate["url"]
+        print(
+            f"   → Search {index}/{len(search_urls)}: "
+            f"{search_url}"
+        )
+
+        try:
+
+            listings = collect_search_results(
+                search_url
+            )
+
+        except Exception as error:
+
+            print(
+                f"      ↳ Search failed: {error}"
+            )
+
+            continue
+
+        new_count = 0
+
+        for listing in listings:
+
+            url = listing.get(
+                "url",
+                "",
+            )
+
+            if not url:
+                continue
+
+            if url in seen_urls:
+                continue
+
+            seen_urls.add(url)
+
+            all_listings.append(listing)
+
+            new_count += 1
 
         print(
-            f"   → Inspecting {index}/"
-            f"{len(candidate_jobs)}: {title}"
+            f"      ↳ Found {len(listings)} listings, "
+            f"{new_count} new"
+        )
+
+    print()
+
+    print(
+        f"   Found {len(all_listings)} "
+        f"unique candidate listings"
+    )
+
+    # --------------------------------------------------------
+    # Filter and inspect jobs.
+    # --------------------------------------------------------
+
+    technology_jobs = []
+
+    filtered_count = 0
+
+    for index, listing in enumerate(
+        all_listings,
+        start=1,
+    ):
+
+        title = listing.get(
+            "title",
+            "Unknown title",
+        )
+
+        url = listing.get(
+            "url",
+            "",
+        )
+
+        print(
+            f"   → Inspecting "
+            f"{index}/{len(all_listings)}: "
+            f"{title}"
         )
 
         # ----------------------------------------------------
-        # Obvious non-technology title.
+        # Explicitly excluded title.
         # ----------------------------------------------------
 
-        if title_is_clearly_non_technology(
-            title
-        ):
-
-            filtered_count += 1
+        if title_is_excluded(title):
 
             print(
                 "      ↳ Filtered out: "
-                "non-technology job"
+                "excluded job category"
             )
+
+            filtered_count += 1
 
             continue
 
         # ----------------------------------------------------
         # Strong technology title.
-        #
-        # No extra request is necessary.
         # ----------------------------------------------------
 
-        if is_strong_technology_title(
-            title
-        ):
+        if title_matches_technology(title):
 
             print(
                 "      ↳ Technology-related title"
             )
 
+            try:
+
+                details = get_job_details(
+                    url
+                )
+
+            except Exception as error:
+
+                print(
+                    f"      ↳ Failed to fetch details: "
+                    f"{error}"
+                )
+
+                filtered_count += 1
+
+                continue
+
             technology_jobs.append(
-                candidate
+                details
             )
 
             continue
 
         # ----------------------------------------------------
-        # Generic title.
-        #
-        # Inspect the actual job page.
+        # Ambiguous title.
         # ----------------------------------------------------
 
         try:
@@ -1324,61 +2083,56 @@ def collect_jobs(listing_url):
                 url
             )
 
-            description = details.get(
-                "description",
-                "",
-            )
-
-            if is_technology_job(
-                title,
-                description,
-            ):
-
-                print(
-                    "      ↳ Technology-related "
-                    "job description"
-                )
-
-                # Keep details so run_job_search.py
-                # does not download the page again.
-                candidate["details"] = (
-                    details
-                )
-
-                technology_jobs.append(
-                    candidate
-                )
-
-            else:
-
-                filtered_count += 1
-
-                print(
-                    "      ↳ Filtered out: "
-                    "non-technology job"
-                )
-
-        except requests.RequestException as error:
-
-            print(
-                f"      ↳ Could not inspect page: "
-                f"{error}"
-            )
-
         except Exception as error:
 
             print(
-                f"      ↳ Error inspecting page: "
+                f"      ↳ Could not inspect job: "
                 f"{error}"
             )
 
+            filtered_count += 1
+
+            continue
+
+        description = details.get(
+            "description",
+            "",
+        )
+
+        if description_matches_technology(
+            title,
+            description,
+        ):
+
+            print(
+                "      ↳ Technology-related "
+                "job description"
+            )
+
+            technology_jobs.append(
+                details
+            )
+
+        else:
+
+            print(
+                "      ↳ Filtered out: "
+                "non-technology job"
+            )
+
+            filtered_count += 1
+
+    print()
+
     print(
-        f"   Filtered out {filtered_count} "
+        f"   Filtered out "
+        f"{filtered_count} "
         f"non-technology jobs"
     )
 
     print(
-        f"   Found {len(technology_jobs)} "
+        f"   Found "
+        f"{len(technology_jobs)} "
         f"technology jobs"
     )
 
@@ -1386,129 +2140,89 @@ def collect_jobs(listing_url):
 
 
 # ============================================================
-# DIRECT TEST
+# TEST
 # ============================================================
 
 if __name__ == "__main__":
-
-    listing_url = (
-    f"{BASE_URL}/jobs/software-data"
-    )
 
     print("=" * 60)
     print("BRIGHTERMONDAY COLLECTION TEST")
     print("=" * 60)
     print()
 
-    print(
-        "Collecting BrighterMonday jobs..."
-    )
-
-    jobs = collect_jobs(
-        listing_url
-    )
+    jobs = collect_jobs()
 
     print()
 
+    print("=" * 60)
     print(
-        f"Final technology jobs: {len(jobs)}"
+        f"FINAL TECHNOLOGY JOBS: {len(jobs)}"
     )
+    print("=" * 60)
 
     print()
 
-    if jobs:
-
-        first_job = jobs[0]
-
-        print(
-            "Testing first technology job:"
-        )
-
-        print(
-            f"Title: {first_job['title']}"
-        )
-
-        print(
-            f"URL: {first_job['url']}"
-        )
-
-        print()
-
-        # Reuse details if collect_jobs()
-        # already fetched them.
-        details = first_job.get(
-            "details"
-        )
-
-        if not details:
-
-            details = get_job_details(
-                first_job["url"]
-            )
-
-        print("=" * 60)
-        print("JOB DETAILS")
-        print("=" * 60)
-
-        print(
-            f"Title: {details['title']}"
-        )
-
-        print(
-            f"Company: {details['company']}"
-        )
-
-        print(
-            f"Location: {details['location']}"
-        )
-
-        print(
-            f"Job Type: {details['job_type']}"
-        )
-
-        print(
-            f"Qualification: {details['qualification']}"
-        )
-
-        print(
-            f"Experience: {details['experience']}"
-        )
-
-        print(
-            f"Experience Length: "
-            f"{details['experience_length']}"
-        )
-
-        print(
-            f"Posted: {details['posted']}"
-        )
-
-        print(
-            f"Deadline: {details['deadline']}"
-        )
-
-        print(
-            f"Description length: "
-            f"{len(details['description'])}"
-        )
-
-        print()
-
-        print(
-            "DESCRIPTION PREVIEW"
-        )
-
-        print(
-            "==================="
-        )
-
-        print(
-            details["description"][:1000]
-        )
-
-    else:
+    if not jobs:
 
         print(
             "No technology jobs found."
         )
 
+    else:
+
+        for index, job in enumerate(
+            jobs,
+            start=1,
+        ):
+
+            print(
+                f"{index}. "
+                f"{job.get('title', '')}"
+            )
+
+            print(
+                f"   Company: "
+                f"{job.get('company', '')}"
+            )
+
+            print(
+                f"   Location: "
+                f"{job.get('location', '')}"
+            )
+
+            print(
+                f"   Job Type: "
+                f"{job.get('job_type', '')}"
+            )
+
+            print(
+                f"   Qualification: "
+                f"{job.get('qualification', '')}"
+            )
+
+            print(
+                f"   Experience: "
+                f"{job.get('experience', '')}"
+            )
+
+            print(
+                f"   Experience Length: "
+                f"{job.get('experience_length', '')}"
+            )
+
+            print(
+                f"   Posted: "
+                f"{job.get('posted', '')}"
+            )
+
+            print(
+                f"   Deadline: "
+                f"{job.get('deadline', '')}"
+            )
+
+            print(
+                f"   URL: "
+                f"{job.get('url', '')}"
+            )
+
+            print()

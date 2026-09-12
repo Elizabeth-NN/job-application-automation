@@ -2,7 +2,8 @@
 """
 Job collection coordinator.
 
-Collects jobs from all configured job sources.
+Collects jobs from all configured job sources,
+combines them, and removes duplicate listings.
 """
 
 from scripts.sources.myjobmag import (
@@ -96,6 +97,11 @@ def collect_myjobmag():
 def collect_brightermonday():
     """
     Collect and fully extract jobs from BrighterMonday.
+
+    BrighterMonday's collector may already have fetched
+    complete job details for some listings. When those
+    details are available, reuse them instead of making
+    another HTTP request.
     """
 
     jobs = []
@@ -121,6 +127,29 @@ def collect_brightermonday():
 
             try:
 
+                # ------------------------------------------------
+                # Reuse details if the BrighterMonday collector
+                # already downloaded the job page.
+                # ------------------------------------------------
+
+                details = listing.get(
+                    "details"
+                )
+
+                if details:
+
+                    details["source"] = "BrighterMonday"
+
+                    jobs.append(
+                        details
+                    )
+
+                    continue
+
+                # ------------------------------------------------
+                # Otherwise fetch the job details normally.
+                # ------------------------------------------------
+
                 details = get_brightermonday_details(
                     listing["url"]
                 )
@@ -142,64 +171,26 @@ def collect_brightermonday():
 
 
 # ============================================================
-# COLLECT ALL SOURCES
+# REMOVE DUPLICATES
 # ============================================================
 
-def collect_all_jobs():
+def remove_duplicate_jobs(jobs):
     """
-    Collect jobs from all available sources,
-    combine them, and remove duplicates.
+    Remove duplicate jobs based primarily on URL.
+
+    A URL uniquely identifies a listing on the source.
     """
-
-    all_jobs = []
-
-    # ========================================================
-    # MYJOBMAG
-    # ========================================================
-
-    print("Collecting from MyJobMag...")
-
-    myjobmag_jobs = collect_myjobmag()
-
-    print(
-        f"   Found {len(myjobmag_jobs)} jobs"
-    )
-
-    all_jobs.extend(
-        myjobmag_jobs
-    )
-
-    # ========================================================
-    # BRIGHTERMONDAY
-    # ========================================================
-
-    print()
-    print("Collecting from BrighterMonday...")
-
-    brightermonday_jobs = collect_brightermonday()
-
-    print(
-        f"   Found {len(brightermonday_jobs)} jobs"
-    )
-
-    all_jobs.extend(
-        brightermonday_jobs
-    )
-
-    # ========================================================
-    # REMOVE DUPLICATES
-    # ========================================================
 
     unique_jobs = []
 
     seen_urls = set()
 
-    for job in all_jobs:
+    for job in jobs:
 
         url = job.get(
             "url",
             ""
-        )
+        ).strip()
 
         if not url:
             continue
@@ -219,6 +210,83 @@ def collect_all_jobs():
 
 
 # ============================================================
+# COLLECT ALL SOURCES
+# ============================================================
+
+def collect_all_jobs():
+    """
+    Collect jobs from all configured sources,
+    combine them, and remove duplicates.
+    """
+
+    all_jobs = []
+
+    # ========================================================
+    # MYJOBMAG
+    # ========================================================
+
+    print(
+        "Collecting from MyJobMag..."
+    )
+
+    myjobmag_jobs = collect_myjobmag()
+
+    print(
+        f"   Found {len(myjobmag_jobs)} jobs"
+    )
+
+    all_jobs.extend(
+        myjobmag_jobs
+    )
+
+    # ========================================================
+    # BRIGHTERMONDAY
+    # ========================================================
+
+    print()
+
+    print(
+        "Collecting from BrighterMonday..."
+    )
+
+    brightermonday_jobs = collect_brightermonday()
+
+    print(
+        f"   Found {len(brightermonday_jobs)} jobs"
+    )
+
+    all_jobs.extend(
+        brightermonday_jobs
+    )
+
+    # ========================================================
+    # REMOVE DUPLICATES
+    # ========================================================
+
+    unique_jobs = remove_duplicate_jobs(
+        all_jobs
+    )
+
+    # ========================================================
+    # REPORT DUPLICATES
+    # ========================================================
+
+    duplicate_count = (
+        len(all_jobs)
+        - len(unique_jobs)
+    )
+
+    if duplicate_count > 0:
+
+        print(
+            f"   Removed {duplicate_count} "
+            f"duplicate jobs"
+        )
+
+    return unique_jobs
+
+
+# ============================================================
 # TEST
 # ============================================================
 
@@ -232,10 +300,13 @@ if __name__ == "__main__":
     jobs = collect_all_jobs()
 
     print()
+
     print("=" * 60)
+
     print(
         f"TOTAL JOBS: {len(jobs)}"
     )
+
     print("=" * 60)
 
     print()
