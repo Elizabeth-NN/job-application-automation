@@ -1,3 +1,4 @@
+
 """
 Job matching and scoring engine.
 
@@ -29,18 +30,75 @@ from pathlib import Path
 
 
 # ============================================================
-# CANDIDATE PROFILE
+# PATHS
 # ============================================================
 
 PROFILE_FILE = Path("data/candidate_profile.json")
 
 
+# ============================================================
+# TEXT HELPERS
+# ============================================================
+
+def normalize(text):
+    """
+    Normalize text for easier matching.
+    """
+
+    if not text:
+        return ""
+
+    text = str(text).lower()
+
+    text = re.sub(
+        r"[^a-z0-9+#.\-/ ]",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+def contains_term(text, term):
+    """
+    Check whether a term exists as a meaningful word/phrase.
+    """
+
+    text = normalize(text)
+    term = normalize(term)
+
+    if not text or not term:
+        return False
+
+    pattern = (
+        r"(?<!\w)"
+        + re.escape(term)
+        + r"(?!\w)"
+    )
+
+    return re.search(
+        pattern,
+        text
+    ) is not None
+
+
+# ============================================================
+# CANDIDATE PROFILE
+# ============================================================
+
 def load_candidate_profile():
     """
-    Load Elizabeth's candidate profile from JSON.
+    Load Elizabeth's profile from candidate_profile.json.
     """
 
     if not PROFILE_FILE.exists():
+
         raise FileNotFoundError(
             f"Candidate profile not found: {PROFILE_FILE}"
         )
@@ -54,66 +112,165 @@ def load_candidate_profile():
         return json.load(file)
 
 
+candidate_profile = load_candidate_profile()
+
+
+# ============================================================
+# SKILL NORMALIZATION
+# ============================================================
+
+def normalize_skill(skill):
+    """
+    Normalize skill names and common aliases.
+
+    Different ways of writing the same technology should
+    be treated as the same skill.
+    """
+
+    skill = normalize(skill)
+
+    aliases = {
+
+        # APIs
+        "rest apis": "rest api",
+        "restful api": "rest api",
+        "restful apis": "rest api",
+
+        # React
+        "react.js": "react",
+        "reactjs": "react",
+
+        # Next.js
+        "nextjs": "next.js",
+
+        # Tailwind
+        "tailwindcss": "tailwind css",
+
+        # Database
+        "database schema": "database design",
+        "schema design": "database design",
+
+        # PostgreSQL
+        "postgres": "postgresql",
+        "postgres database": "postgresql",
+
+        # Node
+        "nodejs": "node.js",
+    }
+
+    return aliases.get(
+        skill,
+        skill
+    )
+
+
+# ============================================================
+# BUILD MATCHING PROFILE
+# ============================================================
+
 def get_job_profile():
     """
-    Build the job-matching profile from candidate_profile.json.
-
-    The candidate JSON remains the single source of truth for
-    Elizabeth's skills and education.
+    Build the matching profile from candidate_profile.json.
     """
 
-    profile = load_candidate_profile()
-
-    target_roles = [
-        "python developer",
-        "backend developer",
-        "backend engineer",
-        "software developer",
-        "software engineer",
-        "full stack developer",
-        "fullstack developer",
-        "web developer",
-        "frontend developer",
-        "frontend engineer",
-    ]
+    technical_skills = candidate_profile.get(
+        "technical_skills",
+        {}
+    )
 
     core_skills = []
 
-    for skills in profile.get(
-        "technical_skills",
-        {}
-    ).values():
+    for skills in technical_skills.values():
 
-        core_skills.extend(
-            skill.lower()
-            for skill in skills
+        for skill in skills:
+
+            normalized = normalize_skill(
+                skill
+            )
+
+            if normalized:
+
+                core_skills.append(
+                    normalized
+                )
+
+    target_roles = [
+        normalize(role)
+        for role in candidate_profile.get(
+            "target_roles",
+            []
         )
+    ]
+
+    locations = [
+        normalize(location)
+        for location in candidate_profile.get(
+            "preferred_locations",
+            []
+        )
+    ]
+
+    education = [
+        normalize(item.get("qualification", ""))
+        for item in candidate_profile.get(
+            "education",
+            []
+        )
+    ]
 
     return {
+
         "target_roles": list(
-            dict.fromkeys(target_roles)
+            dict.fromkeys(
+                target_roles
+            )
         ),
 
         "core_skills": list(
-            dict.fromkeys(core_skills)
+            dict.fromkeys(
+                core_skills
+            )
         ),
 
-        "locations": [
-            "nairobi",
-            "kenya",
-            "remote",
-            "hybrid",
-        ],
-
-        "education": [
-            education["qualification"].lower()
-            for education in profile.get(
-                "education",
-                []
+        "locations": list(
+            dict.fromkeys(
+                locations
             )
-            if education.get("qualification")
-        ],
+        ),
+
+        "education": list(
+            dict.fromkeys(
+                education
+            )
+        ),
+
+        "experience_levels": candidate_profile.get(
+            "experience_levels",
+            []
+        ),
     }
+
+
+JOB_PROFILE = get_job_profile()
+
+
+# ============================================================
+# TRANSFERABLE SKILLS
+# ============================================================
+
+TRANSFERABLE_SKILLS = [
+
+    "postgresql",
+    "mysql",
+    "mongodb",
+    "django",
+    "fastapi",
+    "typescript",
+    "node.js",
+    "node",
+    "github",
+    "docker",
+]
 
 
 # ============================================================
@@ -125,34 +282,39 @@ ALL_SKILLS = [
     # Python / Backend
     "python",
     "flask",
+    "flask-restful",
     "django",
     "fastapi",
 
     # APIs
     "rest api",
+    "rest apis",
     "restful api",
     "api development",
 
     # Databases
     "sql",
     "postgresql",
+    "postgres",
     "mysql",
     "database design",
+    "database schema",
     "database",
     "mongodb",
     "oracle",
-    "sqlite",
-    "sqlalchemy",
 
     # Frontend
     "react",
     "react.js",
+    "reactjs",
     "javascript",
     "typescript",
     "html",
     "css",
     "next.js",
+    "nextjs",
     "tailwind css",
+    "tailwindcss",
     "angular",
     "vue.js",
 
@@ -176,25 +338,6 @@ ALL_SKILLS = [
     ".net",
     "c#",
 ]
-
-
-# ============================================================
-# TRANSFERABLE SKILLS
-# ============================================================
-
-TRANSFERABLE_SKILLS = {
-
-    "postgresql",
-    "mysql",
-    "mongodb",
-    "django",
-    "fastapi",
-    "typescript",
-    "node.js",
-    "node",
-    "github",
-    "docker",
-}
 
 
 # ============================================================
@@ -297,6 +440,7 @@ SOFTWARE_ROLE_KEYWORDS = [
 # ============================================================
 
 SENIOR_TITLE_KEYWORDS = [
+
     "senior",
     "lead",
     "principal",
@@ -305,7 +449,9 @@ SENIOR_TITLE_KEYWORDS = [
     "director",
 ]
 
+
 EXPERIENCED_TITLE_KEYWORDS = [
+
     "mid-level",
     "mid level",
     "midlevel",
@@ -313,7 +459,9 @@ EXPERIENCED_TITLE_KEYWORDS = [
     "experienced",
 ]
 
+
 JUNIOR_TITLE_KEYWORDS = [
+
     "junior",
     "entry level",
     "entry-level",
@@ -323,58 +471,6 @@ JUNIOR_TITLE_KEYWORDS = [
     "internship",
     "fresh graduate",
 ]
-
-
-# ============================================================
-# TEXT HELPERS
-# ============================================================
-
-def normalize(text):
-    """
-    Normalize text for easier matching.
-    """
-
-    if not text:
-        return ""
-
-    text = str(text).lower()
-
-    text = re.sub(
-        r"[^a-z0-9+#.\-/ ]",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
-
-
-def contains_term(text, term):
-    """
-    Check whether a term exists as a meaningful word/phrase.
-    """
-
-    text = normalize(text)
-    term = normalize(term)
-
-    if not text or not term:
-        return False
-
-    pattern = (
-        r"(?<!\w)"
-        + re.escape(term)
-        + r"(?!\w)"
-    )
-
-    return re.search(
-        pattern,
-        text
-    ) is not None
 
 
 # ============================================================
@@ -390,7 +486,9 @@ def is_software_role(title, description=""):
     appearing in the description.
     """
 
-    normalized_title = normalize(title)
+    normalized_title = normalize(
+        title
+    )
 
     # Strong non-software title detection.
     for keyword in NON_SOFTWARE_ROLES:
@@ -412,7 +510,7 @@ def is_software_role(title, description=""):
 
             return True
 
-    # If the title is ambiguous, inspect the description.
+    # If title is ambiguous, inspect description.
     normalized_description = normalize(
         description
     )
@@ -428,12 +526,12 @@ def is_software_role(title, description=""):
 
             software_indicators += 1
 
-    # Technology stack can also indicate a software role.
     technology_matches = find_job_skills(
         normalized_description
     )
 
     if len(technology_matches) >= 2:
+
         software_indicators += 2
 
     return software_indicators >= 3
@@ -448,23 +546,27 @@ def find_role_matches(title):
     Find target roles appearing in the job title.
     """
 
-    job_profile = get_job_profile()
-
     matches = []
 
-    normalized_title = normalize(title)
+    normalized_title = normalize(
+        title
+    )
 
-    for role in job_profile["target_roles"]:
+    for role in JOB_PROFILE["target_roles"]:
 
         if contains_term(
             normalized_title,
             role
         ):
 
-            matches.append(role)
+            matches.append(
+                role
+            )
 
     return list(
-        dict.fromkeys(matches)
+        dict.fromkeys(
+            matches
+        )
     )
 
 
@@ -477,21 +579,52 @@ def find_matching_skills(full_text):
     Find core skills Elizabeth has that appear in the job.
     """
 
-    job_profile = get_job_profile()
-
     matching_skills = []
 
-    for skill in job_profile["core_skills"]:
+    normalized_text = normalize(
+        full_text
+    )
 
+    for skill in JOB_PROFILE["core_skills"]:
+
+        # Check normalized aliases.
         if contains_term(
-            full_text,
+            normalized_text,
             skill
         ):
 
-            matching_skills.append(skill)
+            matching_skills.append(
+                skill
+            )
+
+            continue
+
+        # Handle the original forms from the JSON.
+        if skill == "rest api":
+
+            if (
+                contains_term(
+                    normalized_text,
+                    "rest apis"
+                )
+                or contains_term(
+                    normalized_text,
+                    "restful api"
+                )
+                or contains_term(
+                    normalized_text,
+                    "restful apis"
+                )
+            ):
+
+                matching_skills.append(
+                    skill
+                )
 
     return list(
-        dict.fromkeys(matching_skills)
+        dict.fromkeys(
+            matching_skills
+        )
     )
 
 
@@ -507,17 +640,29 @@ def find_transferable_skills(full_text):
 
     matches = []
 
+    normalized_text = normalize(
+        full_text
+    )
+
     for skill in TRANSFERABLE_SKILLS:
 
-        if contains_term(
-            full_text,
+        normalized_skill = normalize_skill(
             skill
+        )
+
+        if contains_term(
+            normalized_text,
+            normalized_skill
         ):
 
-            matches.append(skill)
+            matches.append(
+                normalized_skill
+            )
 
     return list(
-        dict.fromkeys(matches)
+        dict.fromkeys(
+            matches
+        )
     )
 
 
@@ -528,36 +673,40 @@ def find_transferable_skills(full_text):
 def find_job_skills(full_text):
     """
     Find known skills/technologies mentioned in the job.
+
+    Skill aliases are normalized so that:
+
+        REST APIs -> REST API
+        React.js -> React
+        PostgreSQL/Postgres -> PostgreSQL
+        Node.js/Node -> Node.js
     """
 
     job_skills = []
 
+    normalized_text = normalize(
+        full_text
+    )
+
     for skill in ALL_SKILLS:
 
+        normalized_skill = normalize_skill(
+            skill
+        )
+
         if contains_term(
-            full_text,
+            normalized_text,
             skill
         ):
 
-            job_skills.append(skill)
-
-    # Remove aliases where appropriate.
-    if (
-        "react.js" in job_skills
-        and "react" in job_skills
-    ):
-
-        job_skills.remove("react.js")
-
-    if (
-        "node" in job_skills
-        and "node.js" in job_skills
-    ):
-
-        job_skills.remove("node")
+            job_skills.append(
+                normalized_skill
+            )
 
     return list(
-        dict.fromkeys(job_skills)
+        dict.fromkeys(
+            job_skills
+        )
     )
 
 
@@ -573,24 +722,43 @@ def find_outside_technologies(full_text):
 
     outside = []
 
+    normalized_text = normalize(
+        full_text
+    )
+
     for technology, display_name in (
         OUTSIDE_TECHNOLOGIES.items()
     ):
 
         if contains_term(
-            full_text,
+            normalized_text,
             technology
         ):
 
-            # Don't treat transferable technologies
-            # as completely outside the stack.
-            if technology in TRANSFERABLE_SKILLS:
+            normalized_technology = normalize_skill(
+                technology
+            )
+
+            # Do not treat a technology as outside if
+            # it is already considered transferable.
+            if (
+                normalized_technology
+                in [
+                    normalize_skill(skill)
+                    for skill in TRANSFERABLE_SKILLS
+                ]
+            ):
+
                 continue
 
-            outside.append(display_name)
+            outside.append(
+                display_name
+            )
 
     return list(
-        dict.fromkeys(outside)
+        dict.fromkeys(
+            outside
+        )
     )
 
 
@@ -601,30 +769,40 @@ def find_outside_technologies(full_text):
 def find_missing_skills(full_text):
     """
     Find employer technologies that are not currently
-    listed as core or transferable skills.
+    listed in Elizabeth's profile.
     """
-
-    job_profile = get_job_profile()
 
     job_skills = find_job_skills(
         full_text
     )
 
     known_skills = set(
-        job_profile["core_skills"]
-        + list(TRANSFERABLE_SKILLS)
+        JOB_PROFILE["core_skills"]
+    )
+
+    known_skills.update(
+        normalize_skill(skill)
+        for skill in TRANSFERABLE_SKILLS
     )
 
     missing = []
 
     for skill in job_skills:
 
-        if skill not in known_skills:
+        normalized_skill = normalize_skill(
+            skill
+        )
 
-            missing.append(skill)
+        if normalized_skill not in known_skills:
+
+            missing.append(
+                normalized_skill
+            )
 
     return list(
-        dict.fromkeys(missing)
+        dict.fromkeys(
+            missing
+        )
     )
 
 
@@ -701,7 +879,7 @@ def detect_experience_level(
         return "experienced"
 
     # --------------------------------------------------------
-    # Description-level indicators.
+    # Description-level indicators
     # --------------------------------------------------------
 
     description = normalize(
@@ -709,6 +887,7 @@ def detect_experience_level(
     )
 
     senior_phrases = [
+
         "senior level",
         "lead developer",
         "lead engineer",
@@ -728,6 +907,7 @@ def detect_experience_level(
             return "senior"
 
     junior_phrases = [
+
         "entry level",
         "entry-level",
         "recent graduate",
@@ -802,8 +982,8 @@ def find_required_missing_skills(
     missing_skills
 ):
     """
-    Identify missing skills that occur near explicit
-    requirement language.
+    Identify missing skills that occur in a job containing
+    explicit requirement language.
 
     This is a warning mechanism and is not used as a
     second scoring penalty.
@@ -814,6 +994,7 @@ def find_required_missing_skills(
     )
 
     requirement_patterns = [
+
         r"required",
         r"requirements",
         r"must have",
@@ -871,6 +1052,7 @@ def calculate_role_score(role_matches):
     """
 
     if not role_matches:
+
         return 0
 
     return 30
@@ -909,7 +1091,10 @@ def calculate_skill_score(
 
     weighted_matches = (
         core_matches
-        + (transferable_matches * 0.65)
+        + (
+            transferable_matches
+            * 0.65
+        )
     )
 
     ratio = (
@@ -950,12 +1135,15 @@ def calculate_experience_score(
     if experience_level == "experienced":
 
         if years_required is None:
+
             return 8
 
         if years_required <= 2:
+
             return 10
 
         if years_required == 3:
+
             return 7
 
         return 4
@@ -968,7 +1156,7 @@ def calculate_experience_score(
 
 
 # ============================================================
-# LOCATION SCORE
+# LOCATION
 # ============================================================
 
 def find_location_matches(full_text):
@@ -976,21 +1164,27 @@ def find_location_matches(full_text):
     Find matching preferred locations.
     """
 
-    job_profile = get_job_profile()
-
     matches = []
 
-    for location in job_profile["locations"]:
+    normalized_text = normalize(
+        full_text
+    )
+
+    for location in JOB_PROFILE["locations"]:
 
         if contains_term(
-            full_text,
+            normalized_text,
             location
         ):
 
-            matches.append(location)
+            matches.append(
+                location
+            )
 
     return list(
-        dict.fromkeys(matches)
+        dict.fromkeys(
+            matches
+        )
     )
 
 
@@ -1002,6 +1196,7 @@ def calculate_location_score(
     """
 
     if location_matches:
+
         return 10
 
     # Unknown location is neutral rather than a penalty.
@@ -1015,9 +1210,10 @@ def calculate_location_score(
 def calculate_education_score(full_text):
     """
     Education: 5 points.
-    """
 
-    job_profile = get_job_profile()
+    Looks for education requirements in the job rather than
+    simply checking whether Elizabeth has an education.
+    """
 
     education_keywords = [
 
@@ -1026,16 +1222,15 @@ def calculate_education_score(full_text):
         "information technology",
         "information systems",
         "web development",
+
         "bachelor's degree",
         "bachelor degree",
         "bachelor",
         "degree",
-    ]
 
-    # Also include qualifications from the candidate profile.
-    education_keywords.extend(
-        job_profile["education"]
-    )
+        "diploma",
+        "certificate",
+    ]
 
     for keyword in education_keywords:
 
@@ -1069,12 +1264,15 @@ def calculate_technology_score(
     )
 
     if count == 0:
+
         return 5
 
     if count == 1:
+
         return 4
 
     if count == 2:
+
         return 2
 
     return 0
@@ -1096,11 +1294,11 @@ def calculate_match(
         Role relevance:       30 points
         Technical skills:     35 points
         Experience:           15 points
-        Location:             10 points
-        Education:             5 points
-        Technology fit:        5 points
+        Location:              10 points
+        Education:              5 points
+        Technology fit:         5 points
         --------------------------------
-        Total:               100 points
+        Total:                100 points
     """
 
     title = normalize(
@@ -1127,7 +1325,7 @@ def calculate_match(
     )
 
     # --------------------------------------------------------
-    # Non-software jobs are handled separately.
+    # Non-software jobs
     # --------------------------------------------------------
 
     if not software_role:
@@ -1138,28 +1336,43 @@ def calculate_match(
         )
 
         return {
+
             "score": 15,
+
             "category": "POOR MATCH",
+
             "recommendation": "SKIP",
 
             "role_score": 0,
+
             "skill_score": 0,
+
             "experience_score": 5,
+
             "location_score": 5,
+
             "education_score": 0,
+
             "technology_score": 5,
 
             "role_matches": [],
+
             "matching_skills": [],
+
             "transferable_skills": [],
+
             "missing_skills": [],
+
             "job_skills": [],
+
             "location_matches": [],
 
             "experience_level": "unknown",
+
             "years_required": None,
 
             "outside_technologies": [],
+
             "required_missing_skills": [],
 
             "software_role": False,
@@ -1434,7 +1647,6 @@ def calculate_match(
 
         "recommendation": recommendation,
 
-        # Score breakdown
         "role_score": role_score,
 
         "skill_score": skill_score,
@@ -1447,7 +1659,6 @@ def calculate_match(
 
         "technology_score": technology_score,
 
-        # Matching details
         "role_matches": role_matches,
 
         "matching_skills": matching_skills,
@@ -1472,7 +1683,6 @@ def calculate_match(
 
         "software_role": software_role,
 
-        # Warnings
         "warnings": list(
             dict.fromkeys(
                 warnings
@@ -1498,7 +1708,7 @@ if __name__ == "__main__":
 
             "description": """
                 We are looking for a junior Python developer
-                with experience in Python, Flask, REST API
+                with experience in Python, Flask, REST APIs
                 development and Git.
 
                 Bachelor's degree in software engineering
@@ -1523,7 +1733,7 @@ if __name__ == "__main__":
 
             "description": """
                 We are looking for a backend developer
-                with Python, Flask, REST API, database design
+                with Python, Flask, REST APIs, database design
                 and Git experience.
 
                 Knowledge of SQL is an advantage.
@@ -1663,3 +1873,4 @@ if __name__ == "__main__":
             )
 
         print("-" * 60)
+
