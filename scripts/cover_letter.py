@@ -185,10 +185,16 @@ def select_relevant_skills(
     match=None
 ):
     """
-    Select candidate skills relevant to the job.
+    Select the strongest candidate skills for the job.
 
-    If matcher results are available, matching skills are
-    prioritized.
+    Priority:
+    1. Skills explicitly matched by the job matcher.
+    2. Candidate skills explicitly mentioned in the job.
+    3. Core skills relevant to the detected role.
+
+    This prevents the cover letter from mentioning only one
+    matching skill when the job is focused on a technology
+    outside the candidate's primary stack.
     """
 
     job_text = get_job_text(job)
@@ -199,10 +205,6 @@ def select_relevant_skills(
         "technical_skills",
         {}
     )
-
-    # --------------------------------------------------------
-    # First use matcher results when available
-    # --------------------------------------------------------
 
     matching_skills = []
 
@@ -217,13 +219,68 @@ def select_relevant_skills(
         for skill in matching_skills
     }
 
+    role_type = detect_role_type(job)
+
+    # Core skills that should be considered for each role.
+    role_priorities = {
+        "backend": [
+            "Python",
+            "Flask",
+            "REST APIs",
+            "SQLAlchemy",
+            "SQL",
+            "Database Design",
+            "Schema Design",
+            "Git"
+        ],
+
+        "frontend": [
+            "React.js",
+            "JavaScript",
+            "Next.js",
+            "HTML",
+            "CSS",
+            "Tailwind CSS",
+            "Git"
+        ],
+
+        "full_stack": [
+            "Python",
+            "Flask",
+            "REST APIs",
+            "React.js",
+            "JavaScript",
+            "Next.js",
+            "SQL",
+            "Database Design",
+            "Git"
+        ],
+
+        "software": [
+            "Python",
+            "JavaScript",
+            "React.js",
+            "Flask",
+            "REST APIs",
+            "SQL",
+            "Git"
+        ],
+
+        "other": []
+    }
+
+    priorities = role_priorities.get(
+        role_type,
+        []
+    )
+
     # --------------------------------------------------------
-    # Check candidate profile skills
+    # Score every candidate skill
     # --------------------------------------------------------
+
+    scored_skills = []
 
     for category, skills in technical_skills.items():
-
-        relevant = []
 
         for skill in skills:
 
@@ -231,17 +288,70 @@ def select_relevant_skills(
                 skill
             )
 
-            if (
-                normalized_skill in normalized_matches
-                or normalized_skill in job_text
-            ):
-                relevant.append(skill)
+            score = 0
+
+            # Strongest signal:
+            # matcher explicitly identified this skill.
+            if normalized_skill in normalized_matches:
+                score += 100
+
+            # Skill appears in the job description.
+            if normalized_skill in job_text:
+                score += 50
+
+            # Skill is a core skill for this role.
+            if skill in priorities:
+                score += 30
+
+            if score > 0:
+                scored_skills.append(
+                    (
+                        score,
+                        skill,
+                        category
+                    )
+                )
+
+    # --------------------------------------------------------
+    # Sort strongest skills first
+    # --------------------------------------------------------
+
+    scored_skills.sort(
+        key=lambda item: item[0],
+        reverse=True
+    )
+
+    # --------------------------------------------------------
+    # Keep the letter focused.
+    # Maximum six skills.
+    # --------------------------------------------------------
+
+    selected_skills = []
+
+    for score, skill, category in scored_skills:
+
+        if skill not in selected_skills:
+            selected_skills.append(skill)
+
+        if len(selected_skills) >= 6:
+            break
+
+    # --------------------------------------------------------
+    # Rebuild categories
+    # --------------------------------------------------------
+
+    for category, skills in technical_skills.items():
+
+        relevant = [
+            skill
+            for skill in skills
+            if skill in selected_skills
+        ]
 
         if relevant:
             selected[category] = relevant
 
     return selected
-
 
 def flatten_skills(skills):
     """Flatten categorized skills into one list."""
