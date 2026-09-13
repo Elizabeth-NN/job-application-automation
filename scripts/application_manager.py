@@ -6,9 +6,11 @@ from openpyxl import load_workbook
 from scripts.cover_letter import (
     generate_cover_letter,
     save_cover_letter,
-    select_relevant_skills,
-    select_relevant_experience,
-    select_relevant_projects,
+)
+
+from scripts.cv_tailor import (
+    tailor_cv,
+    create_application_directory,
 )
 
 
@@ -205,7 +207,7 @@ def display_job_details(job):
     print("-" * 60)
 
 def prepare_application(job, match=None):
-    """Prepare application documents for a selected job."""
+    """Prepare CV and cover letter documents for a selected job."""
 
     print()
     print("=" * 60)
@@ -219,76 +221,36 @@ def prepare_application(job, match=None):
     )
 
     # --------------------------------------------------------
-    # Load candidate profile through cover letter generator
+    # Create one application directory
     # --------------------------------------------------------
 
-    from scripts.cover_letter import (
-        load_candidate_profile
+    application_directory = create_application_directory(
+        job
     )
 
-    profile = load_candidate_profile()
+    print()
+    print("Application directory:")
+    print(
+        f"  {application_directory}"
+    )
 
     # --------------------------------------------------------
-    # Select relevant information
+    # Generate tailored CV
     # --------------------------------------------------------
 
-    skills = select_relevant_skills(
-        profile,
+    print()
+    print("Generating tailored CV...")
+
+    cv_path = tailor_cv(
         job,
-        match
+        output_directory=application_directory
     )
 
-    experience = select_relevant_experience(
-        profile,
-        job
+    print()
+    print("Tailored CV created:")
+    print(
+        f"  {cv_path}"
     )
-
-    projects = select_relevant_projects(
-        profile,
-        job
-    )
-
-    # --------------------------------------------------------
-    # Display what will be used
-    # --------------------------------------------------------
-
-    print()
-    print("Selected skills:")
-
-    selected_skills = []
-
-    for skill_list in skills.values():
-        selected_skills.extend(skill_list)
-
-    if selected_skills:
-        print(
-            "  " + ", ".join(selected_skills)
-        )
-    else:
-        print("  None")
-
-    print()
-    print("Selected experience:")
-
-    if experience:
-        for item in experience:
-            print(
-                f"  {item.get('title', '')} "
-                f"at {item.get('company', '')}"
-            )
-    else:
-        print("  None")
-
-    print()
-    print("Selected projects:")
-
-    if projects:
-        for project in projects:
-            print(
-                f"  {project.get('name', '')}"
-            )
-    else:
-        print("  None")
 
     # --------------------------------------------------------
     # Generate cover letter
@@ -299,13 +261,12 @@ def prepare_application(job, match=None):
 
     cover_letter_path = save_cover_letter(
         job,
-        match=match
+        match=match,
+        output_directory=application_directory
     )
 
     print()
-    print(
-        f"Cover letter created:"
-    )
+    print("Cover letter created:")
     print(
         f"  {cover_letter_path}"
     )
@@ -316,10 +277,9 @@ def prepare_application(job, match=None):
     print("=" * 60)
 
     return {
+        "application_directory": application_directory,
+        "cv_path": cv_path,
         "cover_letter_path": cover_letter_path,
-        "skills": skills,
-        "experience": experience,
-        "projects": projects,
     }
 
 def update_application(job):
