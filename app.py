@@ -216,6 +216,107 @@ CARD_CSS = """
     margin-top: 10px;
 }
 
+/* ---------- dashboard header ---------- */
+
+@keyframes dash-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dash-fade-up {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.dash-header {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 28px 30px 24px 30px;
+    margin-bottom: 8px;
+    font-family: 'Inter', sans-serif;
+    animation: dash-rise 0.5s ease-out forwards;
+}
+
+.dash-greeting {
+    font-family: 'Fraunces', serif;
+    font-size: 25px;
+    font-weight: 500;
+    margin: 0 0 6px 0;
+    color: var(--ink);
+    line-height: 1.25;
+}
+
+.dash-subtitle {
+    color: var(--ink-soft);
+    font-size: 14px;
+    margin: 0 0 22px 0;
+}
+
+.dash-pipeline {
+    display: flex;
+    border-radius: 8px;
+    overflow: hidden;
+    height: 10px;
+    background: var(--grey-soft);
+}
+
+.dash-pipeline-segment {
+    height: 100%;
+    width: var(--seg-width);
+    /* Grows from 0 to its real width once, on render. Pure CSS —
+       no JS is needed (and st.markdown's injected <script> tags
+       don't execute anyway, since Streamlit inserts this HTML via
+       innerHTML and browsers don't run scripts added that way). */
+    animation: dash-fill-bar 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation-delay: 0.15s;
+}
+
+@keyframes dash-fill-bar {
+    from { width: 0%; }
+    to { width: var(--seg-width); }
+}
+
+.dash-seg-found { background: var(--grey); }
+.dash-seg-review { background: var(--amber); }
+.dash-seg-applied { background: var(--moss); }
+.dash-seg-interview { background: #3E4A35; }
+
+.dash-pipeline-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 12px;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+}
+
+.dash-pipeline-labels > div {
+    opacity: 0;
+    animation: dash-fade-up 0.4s ease-out forwards;
+}
+
+.dash-pipeline-labels > div:nth-child(1) { animation-delay: 0.35s; }
+.dash-pipeline-labels > div:nth-child(2) { animation-delay: 0.45s; }
+.dash-pipeline-labels > div:nth-child(3) { animation-delay: 0.55s; }
+.dash-pipeline-labels > div:nth-child(4) { animation-delay: 0.65s; }
+
+.dash-pipeline-labels b {
+    display: block;
+    color: var(--ink);
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 16px;
+    margin-top: 2px;
+}
+
+.dash-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+}
+
 /* Streamlit doesn't expose a way to attach a custom class to its
    own button/column containers, so the action row below each
    card is a separate block rather than visually fused to it.
@@ -393,6 +494,68 @@ def flatten_html(html):
         line.strip()
         for line in html.strip().splitlines()
     )
+
+
+def render_dashboard_header(total_jobs, jobs_to_review, applications, interviews):
+    """
+    Render the dashboard's header: a time-of-day greeting, a live
+    one-line summary, and a pipeline bar (Found / Reviewing /
+    Applied / Interview) that fills in on render.
+    """
+
+    hour = datetime.now().hour
+
+    if hour < 12:
+        greeting = "Good morning, Elizabeth"
+    elif hour < 18:
+        greeting = "Good afternoon, Elizabeth"
+    else:
+        greeting = "Good evening, Elizabeth"
+
+    subtitle_parts = [f"{total_jobs} jobs in your tracker"]
+
+    if jobs_to_review > 0:
+        subtitle_parts.append(f"{jobs_to_review} waiting on your review")
+
+    subtitle = " · ".join(subtitle_parts)
+
+    # Segment widths as a share of total_jobs, so the bar reflects
+    # real proportions rather than four equal slices.
+    total_for_bar = max(total_jobs, 1)
+
+    segments = [
+        ("dash-seg-found", "var(--grey)", "Found", total_jobs),
+        ("dash-seg-review", "var(--amber)", "Reviewing", jobs_to_review),
+        ("dash-seg-applied", "var(--moss)", "Applied", applications),
+        ("dash-seg-interview", "#3E4A35", "Interview", interviews),
+    ]
+
+    segment_html = "".join(
+        f'<div class="dash-pipeline-segment {css_class}" '
+        f'style="--seg-width:{(count / total_for_bar) * 100:.1f}%"></div>'
+        for css_class, _color, _label, count in segments
+    )
+
+    label_html = "".join(
+        f'<div><span class="dash-dot" style="background:{color}"></span>'
+        f'{label}<b>{count}</b></div>'
+        for _css_class, color, label, count in segments
+    )
+
+    html = f"""
+    <div class="dash-header">
+        <p class="dash-greeting">{greeting}</p>
+        <p class="dash-subtitle">{subtitle}</p>
+        <div class="dash-pipeline">
+            {segment_html}
+        </div>
+        <div class="dash-pipeline-labels">
+            {label_html}
+        </div>
+    </div>
+    """
+
+    return flatten_html(html)
 
 
 def render_job_card_html(job, extra_meta=""):
@@ -777,18 +940,8 @@ jobs = load_jobs()
 
 if page == "Dashboard":
 
-    st.title(
-        "💼 Elizabeth Njuguna's Job Application Assistant"
-    )
-
-    st.caption(
-        "Your job search and application management dashboard."
-    )
-
-    st.divider()
-
     # --------------------------------------------------------
-    # Statistics
+    # Statistics (computed first so the header can use them)
     # --------------------------------------------------------
 
     total_jobs = len(jobs)
@@ -824,6 +977,18 @@ if page == "Dashboard":
         for job in jobs
         if job.get("application_status") == "Rejected"
     )
+
+    st.markdown(
+        render_dashboard_header(
+            total_jobs,
+            jobs_to_review,
+            applications,
+            interviews,
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
 
     col1, col2, col3, col4 = st.columns(4)
 
