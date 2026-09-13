@@ -235,6 +235,9 @@ CARD_CSS = """
     padding: 28px 30px 24px 30px;
     margin-bottom: 8px;
     font-family: 'Inter', sans-serif;
+}
+
+.dash-animate .dash-header {
     animation: dash-rise 0.5s ease-out forwards;
 }
 
@@ -264,10 +267,15 @@ CARD_CSS = """
 .dash-pipeline-segment {
     height: 100%;
     width: var(--seg-width);
-    /* Grows from 0 to its real width once, on render. Pure CSS —
-       no JS is needed (and st.markdown's injected <script> tags
-       don't execute anyway, since Streamlit inserts this HTML via
-       innerHTML and browsers don't run scripts added that way). */
+}
+
+.dash-animate .dash-pipeline-segment {
+    /* Grows from 0 to its real width once, on first load. Pure
+       CSS — no JS is needed (and st.markdown's injected <script>
+       tags don't execute anyway, since Streamlit inserts this
+       HTML via innerHTML and browsers don't run scripts added
+       that way). Gated behind .dash-animate so it plays once per
+       session rather than replaying on every Streamlit rerun. */
     animation: dash-fill-bar 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     animation-delay: 0.15s;
 }
@@ -291,14 +299,18 @@ CARD_CSS = """
 }
 
 .dash-pipeline-labels > div {
+    opacity: 1;
+}
+
+.dash-animate .dash-pipeline-labels > div {
     opacity: 0;
     animation: dash-fade-up 0.4s ease-out forwards;
 }
 
-.dash-pipeline-labels > div:nth-child(1) { animation-delay: 0.35s; }
-.dash-pipeline-labels > div:nth-child(2) { animation-delay: 0.45s; }
-.dash-pipeline-labels > div:nth-child(3) { animation-delay: 0.55s; }
-.dash-pipeline-labels > div:nth-child(4) { animation-delay: 0.65s; }
+.dash-animate .dash-pipeline-labels > div:nth-child(1) { animation-delay: 0.35s; }
+.dash-animate .dash-pipeline-labels > div:nth-child(2) { animation-delay: 0.45s; }
+.dash-animate .dash-pipeline-labels > div:nth-child(3) { animation-delay: 0.55s; }
+.dash-animate .dash-pipeline-labels > div:nth-child(4) { animation-delay: 0.65s; }
 
 .dash-pipeline-labels b {
     display: block;
@@ -315,6 +327,81 @@ CARD_CSS = """
     border-radius: 50%;
     display: inline-block;
     margin-right: 5px;
+}
+
+/* ---------- sidebar ---------- */
+
+[data-testid="stSidebar"] {
+    background: var(--paper);
+    border-right: 1px solid var(--line);
+}
+
+/* Color is safe to apply broadly — it doesn't affect how icons
+   render. Font-family is NOT applied via a universal selector,
+   because Streamlit's collapse arrow (and other icons) are text
+   ligatures like "keyboard_double_arrow_left" rendered through a
+   dedicated icon font. A blanket `* { font-family: Inter }` wins
+   the specificity/source-order fight against that icon font and
+   the icon shows up as literal text instead of an arrow. Inter is
+   applied only to the specific text elements below instead. */
+[data-testid="stSidebar"] {
+    color: var(--ink);
+}
+
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"],
+[data-testid="stSidebar"] h1 {
+    font-family: 'Inter', sans-serif;
+}
+
+[data-testid="stSidebar"] h1 {
+    font-family: 'Fraunces', serif !important;
+    font-weight: 500 !important;
+    font-size: 22px !important;
+    margin-bottom: 2px !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+    color: var(--ink-soft) !important;
+    font-size: 13px !important;
+}
+
+[data-testid="stSidebar"] hr {
+    border-color: var(--line);
+    margin: 18px 0;
+}
+
+/* Nav radio: recolor the native control and turn the selected
+   option into a filled pill. accent-color and :has() are both
+   supported by current evergreen browsers, so this avoids
+   depending on Streamlit/BaseWeb's internal class names, which
+   change across versions. */
+
+[data-testid="stSidebar"] input[type="radio"] {
+    accent-color: var(--moss);
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin-bottom: 2px;
+    transition: background 0.15s ease;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
+    background: var(--moss-soft);
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+    background: var(--moss-soft);
+    font-weight: 600;
+}
+
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) p {
+    color: var(--moss) !important;
+    font-weight: 600;
 }
 
 /* Streamlit doesn't expose a way to attach a custom class to its
@@ -496,11 +583,17 @@ def flatten_html(html):
     )
 
 
-def render_dashboard_header(total_jobs, jobs_to_review, applications, interviews):
+def render_dashboard_header(total_jobs, jobs_to_review, applications, interviews, animate=True):
     """
     Render the dashboard's header: a time-of-day greeting, a live
     one-line summary, and a pipeline bar (Found / Reviewing /
-    Applied / Interview) that fills in on render.
+    Applied / Interview) that fills in on first load.
+
+    animate controls whether the entrance animation plays. It
+    should only be True the first time this renders in a session —
+    Streamlit reruns the whole script on every interaction, so
+    without gating, the "one orchestrated moment" would replay on
+    every button click and filter change instead of playing once.
     """
 
     hour = datetime.now().hour
@@ -542,15 +635,19 @@ def render_dashboard_header(total_jobs, jobs_to_review, applications, interviews
         for _css_class, color, label, count in segments
     )
 
+    wrapper_class = "dash-animate" if animate else ""
+
     html = f"""
-    <div class="dash-header">
-        <p class="dash-greeting">{greeting}</p>
-        <p class="dash-subtitle">{subtitle}</p>
-        <div class="dash-pipeline">
-            {segment_html}
-        </div>
-        <div class="dash-pipeline-labels">
-            {label_html}
+    <div class="{wrapper_class}">
+        <div class="dash-header">
+            <p class="dash-greeting">{greeting}</p>
+            <p class="dash-subtitle">{subtitle}</p>
+            <div class="dash-pipeline">
+                {segment_html}
+            </div>
+            <div class="dash-pipeline-labels">
+                {label_html}
+            </div>
         </div>
     </div>
     """
@@ -909,6 +1006,8 @@ st.sidebar.caption(
     "Job Application Assistant"
 )
 
+st.sidebar.divider()
+
 page = st.sidebar.radio(
     "Navigation",
     [
@@ -916,6 +1015,7 @@ page = st.sidebar.radio(
         "Jobs",
         "Applications",
     ],
+    label_visibility="collapsed",
 )
 
 
@@ -978,12 +1078,20 @@ if page == "Dashboard":
         if job.get("application_status") == "Rejected"
     )
 
+    animate_header = (
+        "dashboard_header_shown"
+        not in st.session_state
+    )
+
+    st.session_state["dashboard_header_shown"] = True
+
     st.markdown(
         render_dashboard_header(
             total_jobs,
             jobs_to_review,
             applications,
             interviews,
+            animate=animate_header,
         ),
         unsafe_allow_html=True,
     )
