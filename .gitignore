@@ -1,43 +1,57 @@
-# Virtual environment
+# ============================================================
+# Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*.pyo
+
 venv/
 .venv/
 env/
 
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
+# ============================================================
+# Environment / secrets
+# ============================================================
 
-# Environment variables
 .env
 .env.*
-!.env.example
+.streamlit/secrets.toml
 
-# IDE/editor files
-.vscode/
-.idea/
+# ============================================================
+# Personal candidate information
+# ============================================================
 
-# OS files
-.DS_Store
-Thumbs.db
+data/candidate_profile.json
 
-# Logs
-*.log
+# ============================================================
+# Job tracker
+# ============================================================
 
-# Generated data
-data/*.csv
-data/*.xlsx
+data/job_tracker.xlsx
 
+# ============================================================
+# Generated applications
+# ============================================================
+
+applications/
+
+# ============================================================
 # Temporary files
+# ============================================================
+
 *.tmp
 *.temp
 
-# Python test/coverage files
-.pytest_cache/
-.coverage
-htmlcov/
+# ============================================================
+# Word temporary files
+# ============================================================
 
-# Secrets and credentials
-credentials.json
-token.json
-secrets.json
+~$*.docx
+
+# ============================================================
+# OS files
+# ============================================================
+
+.DS_Store
+Thumbs.db
