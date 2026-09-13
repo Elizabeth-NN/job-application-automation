@@ -1,4 +1,3 @@
-
 from pathlib import Path
 from datetime import datetime
 
@@ -22,6 +21,8 @@ from scripts.cover_letter import (
 BASE_DIR = Path(__file__).resolve().parent
 
 TRACKER_FILE = BASE_DIR / "data" / "job_tracker.xlsx"
+
+APPLICATIONS_DIR = BASE_DIR / "applications"
 
 
 # ============================================================
@@ -256,8 +257,36 @@ def is_pending_application(job):
         job.get("recommendation")
         in ["APPLY", "REVIEW"]
         and job.get("application_status")
-        in ["Not Applied", "To Apply", None, ""]
+        in [
+            "Not Applied",
+            "To Apply",
+            None,
+            "",
+        ]
     )
+
+
+def format_score(job):
+    """
+    Return a formatted score.
+    """
+
+    return f"{get_score(job):.0f}%"
+
+
+def get_status(job):
+    """
+    Return a readable application status.
+    """
+
+    status = job.get(
+        "application_status"
+    )
+
+    if not status:
+        return "Not Applied"
+
+    return str(status)
 
 
 # ============================================================
@@ -271,7 +300,7 @@ def prepare_application(job):
 
     application_directory = create_application_directory(
         job,
-        base_directory=BASE_DIR / "applications",
+        base_directory=APPLICATIONS_DIR,
     )
 
     # --------------------------------------------------------
@@ -293,6 +322,9 @@ def prepare_application(job):
     )
 
     return {
+        "job_row": job["row"],
+        "job_title": job["title"],
+        "company": job["company"],
         "application_directory": application_directory,
         "cv_path": cv_path,
         "cover_letter_path": cover_letter_path,
@@ -303,7 +335,13 @@ def prepare_application(job):
 # SIDEBAR
 # ============================================================
 
-st.sidebar.title("💼 Job Application Assistant: Elizabeth Njuguna")
+st.sidebar.title(
+    "💼 Elizabeth Njuguna"
+)
+
+st.sidebar.caption(
+    "Job Application Assistant"
+)
 
 page = st.sidebar.radio(
     "Navigation",
@@ -328,7 +366,9 @@ jobs = load_jobs()
 
 if page == "Dashboard":
 
-    st.title("💼 Job Application Assistant: Elizabeth Njuguna")
+    st.title(
+        "💼 Elizabeth Njuguna's Job Application Assistant"
+    )
 
     st.caption(
         "Your job search and application management dashboard."
@@ -377,24 +417,28 @@ if page == "Dashboard":
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+
         st.metric(
             "Jobs Found",
             total_jobs,
         )
 
     with col2:
+
         st.metric(
             "Recommended",
             jobs_to_apply,
         )
 
     with col3:
+
         st.metric(
             "To Review",
             jobs_to_review,
         )
 
     with col4:
+
         st.metric(
             "Applications",
             applications,
@@ -406,17 +450,21 @@ if page == "Dashboard":
     # Application statistics
     # --------------------------------------------------------
 
-    st.subheader("Application Overview")
+    st.subheader(
+        "Application Overview"
+    )
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
+
         st.metric(
             "Interviews",
             interviews,
         )
 
     with col2:
+
         st.metric(
             "Rejected",
             rejected,
@@ -448,7 +496,9 @@ if page == "Dashboard":
     # Top jobs
     # --------------------------------------------------------
 
-    st.subheader("Top Matching Jobs")
+    st.subheader(
+        "Top Matching Jobs"
+    )
 
     pending_jobs = [
         job
@@ -467,10 +517,12 @@ if page == "Dashboard":
 
             score = get_score(job)
 
-            with st.container(border=True):
+            with st.container(
+                border=True
+            ):
 
                 col1, col2, col3 = st.columns(
-                    [5, 3, 1]
+                    [5, 2, 2]
                 )
 
                 with col1:
@@ -497,6 +549,10 @@ if page == "Dashboard":
                 with col3:
 
                     st.write(
+                        "**Recommendation**"
+                    )
+
+                    st.write(
                         job["recommendation"]
                     )
 
@@ -513,19 +569,29 @@ if page == "Dashboard":
 
 elif page == "Jobs":
 
-    st.title("📋 Jobs")
+    st.title(
+        "📋 Jobs"
+    )
 
     st.write(
-        "Browse and prepare applications for matched jobs."
+        "Browse, filter and prepare applications for matched jobs."
     )
 
     st.divider()
 
-    # --------------------------------------------------------
-    # Filters
-    # --------------------------------------------------------
+    # ========================================================
+    # FILTERS
+    # ========================================================
 
-    col1, col2, col3 = st.columns(3)
+    st.subheader(
+        "Filter Jobs"
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    # --------------------------------------------------------
+    # Recommendation filter
+    # --------------------------------------------------------
 
     with col1:
 
@@ -542,13 +608,16 @@ elif page == "Jobs":
             ["All"] + recommendations,
         )
 
+    # --------------------------------------------------------
+    # Status filter
+    # --------------------------------------------------------
+
     with col2:
 
         statuses = sorted(
             {
-                str(job["application_status"])
+                get_status(job)
                 for job in jobs
-                if job["application_status"]
             }
         )
 
@@ -557,20 +626,45 @@ elif page == "Jobs":
             ["All"] + statuses,
         )
 
+    # --------------------------------------------------------
+    # Location filter
+    # --------------------------------------------------------
+
     with col3:
+
+        locations = sorted(
+            {
+                str(job["location"])
+                for job in jobs
+                if job["location"]
+            }
+        )
+
+        location_filter = st.selectbox(
+            "Location",
+            ["All"] + locations,
+        )
+
+    # --------------------------------------------------------
+    # Search
+    # --------------------------------------------------------
+
+    with col4:
 
         search = st.text_input(
             "Search",
             placeholder="Job title or company",
         ).strip().lower()
 
-    # --------------------------------------------------------
-    # Apply filters
-    # --------------------------------------------------------
+    # ========================================================
+    # APPLY FILTERS
+    # ========================================================
 
     filtered_jobs = []
 
     for job in jobs:
+
+        # Recommendation
 
         if (
             recommendation_filter != "All"
@@ -579,24 +673,44 @@ elif page == "Jobs":
         ):
             continue
 
+        # Application status
+
         if (
             status_filter != "All"
-            and job["application_status"]
+            and get_status(job)
             != status_filter
         ):
             continue
+
+        # Location
+
+        if (
+            location_filter != "All"
+            and job["location"]
+            != location_filter
+        ):
+            continue
+
+        # Search
 
         if search:
 
             searchable_text = (
                 f"{job['title']} "
-                f"{job['company']}"
+                f"{job['company']} "
+                f"{job['location']} "
+                f"{job['role_match']} "
+                f"{job['matching_skills']}"
             ).lower()
 
             if search not in searchable_text:
                 continue
 
         filtered_jobs.append(job)
+
+    # --------------------------------------------------------
+    # Sort highest score first
+    # --------------------------------------------------------
 
     filtered_jobs.sort(
         key=get_score,
@@ -607,9 +721,9 @@ elif page == "Jobs":
         f"Showing **{len(filtered_jobs)}** jobs."
     )
 
-    # --------------------------------------------------------
-    # Job list
-    # --------------------------------------------------------
+    # ========================================================
+    # ALL JOBS DISPLAY
+    # ========================================================
 
     if not filtered_jobs:
 
@@ -619,173 +733,313 @@ elif page == "Jobs":
 
     else:
 
-        job_options = {}
+        st.subheader(
+            "Available Jobs"
+        )
+
+        # ----------------------------------------------------
+        # Summary table
+        # ----------------------------------------------------
+
+        table_data = []
+
+        for job in filtered_jobs:
+
+            table_data.append(
+                {
+                    "Score": format_score(job),
+                    "Job Title": job["title"],
+                    "Company": job["company"],
+                    "Location": job["location"],
+                    "Recommendation": job["recommendation"],
+                    "Status": get_status(job),
+                    "Deadline": (
+                        job["deadline"]
+                        or "Not specified"
+                    ),
+                }
+            )
+
+        st.dataframe(
+            table_data,
+            width=True,
+            hide_index=True,
+        )
+
+        st.divider()
+
+        # ====================================================
+        # INDIVIDUAL JOB CARDS
+        # ====================================================
+
+        st.subheader(
+            "Job Listings"
+        )
 
         for index, job in enumerate(
             filtered_jobs
         ):
 
-            label = (
-                f"{get_score(job):.0f}% — "
-                f"{job['title']} — "
-                f"{job['company']}"
-            )
+            score = get_score(job)
 
-            job_options[label] = index
-
-        selected_label = st.selectbox(
-            "Select a job",
-            list(job_options.keys()),
-        )
-
-        selected_job = filtered_jobs[
-            job_options[selected_label]
-        ]
-
-        st.divider()
-
-        # ----------------------------------------------------
-        # Job details
-        # ----------------------------------------------------
-
-        st.subheader(
-            selected_job["title"]
-        )
-
-        st.write(
-            f"### {selected_job['company']}"
-        )
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-
-            st.metric(
-                "Match Score",
-                f"{get_score(selected_job):.0f}%",
-            )
-
-        with col2:
-
-            st.write("**Location**")
-            st.write(
-                selected_job["location"]
-                or "Not specified"
-            )
-
-        with col3:
-
-            st.write("**Recommendation**")
-            st.write(
-                selected_job["recommendation"]
-                or "Not specified"
-            )
-
-        # ----------------------------------------------------
-        # Details
-        # ----------------------------------------------------
-
-        with st.expander(
-            "Job Details",
-            expanded=True,
-        ):
-
-            st.write(
-                f"**Role Match:** "
-                f"{selected_job['role_match'] or 'Not specified'}"
-            )
-
-            st.write(
-                f"**Matching Skills:** "
-                f"{selected_job['matching_skills'] or 'None'}"
-            )
-
-            st.write(
-                f"**Missing Skills:** "
-                f"{selected_job['missing_skills'] or 'None'}"
-            )
-
-            st.write(
-                f"**Warnings:** "
-                f"{selected_job['warnings'] or 'None'}"
-            )
-
-            st.write(
-                f"**Posted:** "
-                f"{selected_job['posted'] or 'Not specified'}"
-            )
-
-            st.write(
-                f"**Deadline:** "
-                f"{selected_job['deadline'] or 'Not specified'}"
-            )
-
-            st.write(
-                f"**Application Status:** "
-                f"{selected_job['application_status'] or 'Not Applied'}"
-            )
-
-        # ----------------------------------------------------
-        # Application URL
-        # ----------------------------------------------------
-
-        if selected_job["url"]:
-
-            st.link_button(
-                "🔗 Open Job Listing",
-                selected_job["url"],
-            )
-
-        st.divider()
-
-        # ----------------------------------------------------
-        # Prepare application
-        # ----------------------------------------------------
-
-        can_prepare = (
-            selected_job["application_status"]
-            not in [
-                "Applied",
-                "Rejected",
-            ]
-        )
-
-        if can_prepare:
-
-            if st.button(
-                "📄 Prepare Application",
-                type="primary",
+            with st.container(
+                border=True
             ):
 
-                with st.spinner(
-                    "Generating tailored CV and cover letter..."
+                # ------------------------------------------------
+                # Header
+                # ------------------------------------------------
+
+                col1, col2, col3, col4 = st.columns(
+                    [5, 2, 2, 2]
+                )
+
+                with col1:
+
+                    st.markdown(
+                        f"### {job['title']}"
+                    )
+
+                    st.write(
+                        f"**{job['company']}**"
+                    )
+
+                with col2:
+
+                    st.metric(
+                        "Match",
+                        f"{score:.0f}%",
+                    )
+
+                with col3:
+
+                    st.write(
+                        "**Location**"
+                    )
+
+                    st.write(
+                        job["location"]
+                        or "Not specified"
+                    )
+
+                with col4:
+
+                    st.write(
+                        "**Recommendation**"
+                    )
+
+                    st.write(
+                        job["recommendation"]
+                        or "Not specified"
+                    )
+
+                # ------------------------------------------------
+                # Basic information
+                # ------------------------------------------------
+
+                info_col1, info_col2, info_col3 = st.columns(
+                    3
+                )
+
+                with info_col1:
+
+                    st.write(
+                        f"**Role Match:** "
+                        f"{job['role_match'] or 'Not specified'}"
+                    )
+
+                with info_col2:
+
+                    st.write(
+                        f"**Deadline:** "
+                        f"{job['deadline'] or 'Not specified'}"
+                    )
+
+                with info_col3:
+
+                    st.write(
+                        f"**Status:** "
+                        f"{get_status(job)}"
+                    )
+
+                # ------------------------------------------------
+                # Details
+                # ------------------------------------------------
+
+                with st.expander(
+                    "View Job Details"
                 ):
 
-                    try:
+                    st.write(
+                        f"**Matching Skills:** "
+                        f"{job['matching_skills'] or 'None'}"
+                    )
 
-                        application = prepare_application(
-                            selected_job
+                    st.write(
+                        f"**Missing Skills:** "
+                        f"{job['missing_skills'] or 'None'}"
+                    )
+
+                    st.write(
+                        f"**Warnings:** "
+                        f"{job['warnings'] or 'None'}"
+                    )
+
+                    st.write(
+                        f"**Posted:** "
+                        f"{job['posted'] or 'Not specified'}"
+                    )
+
+                    st.write(
+                        f"**Application Status:** "
+                        f"{get_status(job)}"
+                    )
+
+                    if job["notes"]:
+
+                        st.write(
+                            f"**Notes:** "
+                            f"{job['notes']}"
                         )
 
-                        st.session_state[
-                            "last_application"
-                        ] = application
+                # ------------------------------------------------
+                # Actions
+                # ------------------------------------------------
 
-                        st.success(
-                            "Application documents generated successfully."
+                action_col1, action_col2 = st.columns(
+                    [1, 1]
+                )
+
+                with action_col1:
+
+                    if job["url"]:
+
+                        st.link_button(
+                            "🔗 Open Job Listing",
+                            job["url"],
+                            width=True,
                         )
 
-                    except Exception as error:
+                with action_col2:
 
-                        st.error(
-                            f"Could not generate application: {error}"
+                    can_prepare = (
+                        get_status(job)
+                        not in [
+                            "Applied",
+                            "Rejected",
+                        ]
+                    )
+
+                    if can_prepare:
+
+                        prepare_key = (
+                            f"prepare_{job['row']}"
                         )
 
-        else:
+                        if st.button(
+                            "📄 Prepare Application",
+                            key=prepare_key,
+                            type="primary",
+                            width=True,
+                        ):
 
-            st.info(
-                "This job has already been processed."
-            )
+                            with st.spinner(
+                                "Generating tailored CV and cover letter..."
+                            ):
+
+                                try:
+
+                                    application = prepare_application(
+                                        job
+                                    )
+
+                                    st.session_state[
+                                        "last_application"
+                                    ] = application
+
+                                    st.success(
+                                        "Application documents generated successfully."
+                                    )
+
+                                except Exception as error:
+
+                                    st.error(
+                                        "Could not generate application: "
+                                        f"{error}"
+                                    )
+
+                    else:
+
+                        st.info(
+                            "Application already processed."
+                        )
+
+                # ------------------------------------------------
+                # Show generated documents if this is the job
+                # ------------------------------------------------
+
+                last_application = (
+                    st.session_state.get(
+                        "last_application"
+                    )
+                )
+
+                if (
+                    last_application
+                    and last_application.get(
+                        "job_row"
+                    ) == job["row"]
+                ):
+
+                    st.divider()
+
+                    st.success(
+                        "Application documents are ready."
+                    )
+
+                    st.write(
+                        "**Tailored CV:**"
+                    )
+
+                    st.code(
+                        str(
+                            last_application[
+                                "cv_path"
+                            ]
+                        ),
+                        language="text",
+                    )
+
+                    st.write(
+                        "**Cover Letter:**"
+                    )
+
+                    st.code(
+                        str(
+                            last_application[
+                                "cover_letter_path"
+                            ]
+                        ),
+                        language="text",
+                    )
+
+                    st.write(
+                        "**Application Folder:**"
+                    )
+
+                    st.code(
+                        str(
+                            last_application[
+                                "application_directory"
+                            ]
+                        ),
+                        language="text",
+                    )
+
+                    st.info(
+                        "Review the generated CV and cover letter "
+                        "before marking the application as submitted."
+                    )
 
 
 # ============================================================
@@ -794,13 +1048,19 @@ elif page == "Jobs":
 
 elif page == "Applications":
 
-    st.title("📁 Applications")
+    st.title(
+        "📁 Applications"
+    )
 
     st.write(
         "Track applications that have been prepared or submitted."
     )
 
     st.divider()
+
+    # ========================================================
+    # APPLICATION COUNTS
+    # ========================================================
 
     applied_jobs = [
         job
@@ -814,7 +1074,19 @@ elif page == "Applications":
         if is_pending_application(job)
     ]
 
-    col1, col2 = st.columns(2)
+    interviews = [
+        job
+        for job in jobs
+        if job["application_status"] == "Interview"
+    ]
+
+    rejected = [
+        job
+        for job in jobs
+        if job["application_status"] == "Rejected"
+    ]
+
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
 
@@ -830,11 +1102,25 @@ elif page == "Applications":
             len(pending_jobs),
         )
 
+    with col3:
+
+        st.metric(
+            "Interviews",
+            len(interviews),
+        )
+
+    with col4:
+
+        st.metric(
+            "Rejected",
+            len(rejected),
+        )
+
     st.divider()
 
-    # --------------------------------------------------------
-    # Recently generated application
-    # --------------------------------------------------------
+    # ========================================================
+    # LATEST GENERATED APPLICATION
+    # ========================================================
 
     if "last_application" in st.session_state:
 
@@ -851,33 +1137,67 @@ elif page == "Applications":
         )
 
         st.write(
+            f"**Job:** "
+            f"{application.get('job_title', 'Unknown')}"
+        )
+
+        st.write(
+            f"**Company:** "
+            f"{application.get('company', 'Unknown')}"
+        )
+
+        # ----------------------------------------------------
+        # CV
+        # ----------------------------------------------------
+
+        st.write(
             "**Tailored CV:**"
         )
 
         st.code(
-            str(application["cv_path"]),
+            str(
+                application["cv_path"]
+            ),
             language="text",
         )
+
+        # ----------------------------------------------------
+        # Cover letter
+        # ----------------------------------------------------
 
         st.write(
             "**Cover Letter:**"
         )
 
         st.code(
-            str(application["cover_letter_path"]),
+            str(
+                application["cover_letter_path"]
+            ),
             language="text",
         )
+
+        # ----------------------------------------------------
+        # Folder
+        # ----------------------------------------------------
 
         st.write(
             "**Application Folder:**"
         )
 
         st.code(
-            str(application["application_directory"]),
+            str(
+                application[
+                    "application_directory"
+                ]
+            ),
             language="text",
         )
 
         st.divider()
+
+        # ====================================================
+        # RECORD APPLICATION
+        # ====================================================
 
         st.subheader(
             "Record Application"
@@ -895,31 +1215,30 @@ elif page == "Applications":
 
         notes = st.text_area(
             "Notes",
-            placeholder="Optional notes about this application...",
+            placeholder=(
+                "Optional notes about this application..."
+            ),
         )
 
         if st.button(
             "✅ Mark as Applied",
             type="primary",
+            width=True,
         ):
 
-            # Find the corresponding job using the
-            # application directory name.
+            # ------------------------------------------------
+            # Find job using stored row number.
+            # ------------------------------------------------
 
-            directory_name = Path(
-                application["application_directory"]
-            ).name
+            job_row = application.get(
+                "job_row"
+            )
 
             matching_job = None
 
             for job in jobs:
 
-                expected_directory = create_application_directory(
-                    job,
-                    base_directory=BASE_DIR / "applications",
-                )
-
-                if expected_directory.name == directory_name:
+                if job["row"] == job_row:
 
                     matching_job = job
                     break
@@ -960,9 +1279,11 @@ elif page == "Applications":
                         message
                     )
 
-    # --------------------------------------------------------
-    # Submitted applications
-    # --------------------------------------------------------
+    # ========================================================
+    # SUBMITTED APPLICATIONS
+    # ========================================================
+
+    st.divider()
 
     st.subheader(
         "Submitted Applications"
@@ -977,13 +1298,15 @@ elif page == "Applications":
     else:
 
         applied_jobs.sort(
-            key=lambda job: get_score(job),
+            key=get_score,
             reverse=True,
         )
 
         for job in applied_jobs:
 
-            with st.container(border=True):
+            with st.container(
+                border=True
+            ):
 
                 st.markdown(
                     f"### {job['title']}"
@@ -993,31 +1316,46 @@ elif page == "Applications":
                     f"**{job['company']}**"
                 )
 
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(
+                    4
+                )
 
                 with col1:
 
                     st.write(
-                        f"Match: "
+                        f"**Match:** "
                         f"{get_score(job):.0f}%"
                     )
 
                 with col2:
 
                     st.write(
-                        f"CV: "
-                        f"{job['cv_version'] or 'Not specified'}"
+                        f"**Location:** "
+                        f"{job['location'] or 'Not specified'}"
                     )
 
                 with col3:
 
                     st.write(
-                        f"Cover Letter: "
+                        f"**CV:** "
+                        f"{job['cv_version'] or 'Not specified'}"
+                    )
+
+                with col4:
+
+                    st.write(
+                        f"**Cover Letter:** "
                         f"{job['cover_letter'] or 'No'}"
                     )
 
                 st.write(
-                    f"Notes: "
+                    f"**Notes:** "
                     f"{job['notes'] or 'None'}"
                 )
 
+                if job["url"]:
+
+                    st.link_button(
+                        "🔗 Open Job Listing",
+                        job["url"],
+                    )
