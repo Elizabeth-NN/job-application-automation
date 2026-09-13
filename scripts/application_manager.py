@@ -1,171 +1,294 @@
-"""
-Application manager.
-
-Coordinates the generation of a complete job application:
-
-    Job
-      ↓
-    Tailored CV
-      ↓
-    Tailored Cover Letter
-      ↓
-    Application folder
-
-The manager does not decide whether a candidate should apply.
-That decision is handled by the job matcher/reviewer.
-"""
-
 from pathlib import Path
+from datetime import datetime
 
-from scripts.cv_tailor import tailor_cv
-from scripts.cover_letter import save_cover_letter
+from openpyxl import load_workbook
+
+from scripts.cover_letter import (
+    generate_cover_letter,
+    save_cover_letter,
+    select_relevant_skills,
+    select_relevant_experience,
+    select_relevant_projects,
+)
 
 
-# ============================================================
-# PATHS
-# ============================================================
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-APPLICATIONS_DIR = BASE_DIR / "applications"
+TRACKER_FILE = Path("data/job_tracker.xlsx")
 
 
-# ============================================================
-# APPLICATION DIRECTORY
-# ============================================================
+HEADERS = [
+    "Date Found",
+    "Job Title",
+    "Company",
+    "Location",
+    "Score",
+    "Category",
+    "Recommendation",
+    "Role Match",
+    "Matching Skills",
+    "Missing Skills",
+    "Warnings",
+    "Posted",
+    "Deadline",
+    "URL",
+    "Application Status",
+    "CV Version",
+    "Cover Letter",
+    "Notes",
+]
 
-def create_application_directory(job):
-    """
-    Create the directory for a specific job application.
 
-    Example:
+def get_column_indexes(sheet):
+    """Create a mapping between column names and column numbers."""
 
-        applications/
-        └── company-backend-developer/
-    """
+    indexes = {}
 
-    company = job.get(
-        "company",
-        "company"
-    )
+    for cell in sheet[1]:
+        indexes[cell.value] = cell.column
 
-    title = job.get(
-        "title",
-        "software-developer"
-    )
+    return indexes
 
-    # Convert to strings in case the source gives us
-    # unexpected values.
-    company = str(company).strip()
-    title = str(title).strip()
 
-    directory_name = (
-        f"{company}-{title}"
-    )
+def get_jobs_to_apply():
+    """Return jobs that are recommended for application/review."""
 
-    # Keep only filesystem-safe characters.
-    safe_name = "".join(
-        character.lower()
-        if character.isalnum()
-        else "-"
-        for character in directory_name
-    )
+    if not TRACKER_FILE.exists():
+        print("Tracker file does not exist.")
+        return []
 
-    # Remove repeated hyphens.
-    while "--" in safe_name:
-        safe_name = safe_name.replace(
-            "--",
-            "-"
+    workbook = load_workbook(TRACKER_FILE)
+    sheet = workbook["Jobs"]
+
+    columns = get_column_indexes(sheet)
+
+    jobs = []
+
+    for row_number in range(2, sheet.max_row + 1):
+
+        recommendation = sheet.cell(
+            row=row_number,
+            column=columns["Recommendation"]
+        ).value
+
+        status = sheet.cell(
+            row=row_number,
+            column=columns["Application Status"]
+        ).value
+
+        # Only show jobs that have not already been applied for.
+        if (
+            recommendation in ["APPLY", "REVIEW"]
+            and status in ["Not Applied", "To Apply"]
+        ):
+            jobs.append({
+                "row": row_number,
+                "title": sheet.cell(
+                    row=row_number,
+                    column=columns["Job Title"]
+                ).value,
+                "company": sheet.cell(
+                    row=row_number,
+                    column=columns["Company"]
+                ).value,
+                "location": sheet.cell(
+                    row=row_number,
+                    column=columns["Location"]
+                ).value,
+                "score": sheet.cell(
+                    row=row_number,
+                    column=columns["Score"]
+                ).value,
+                "category": sheet.cell(
+                    row=row_number,
+                    column=columns["Category"]
+                ).value,
+                "recommendation": recommendation,
+                "role_match": sheet.cell(
+                    row=row_number,
+                    column=columns["Role Match"]
+                ).value,
+                "matching_skills": sheet.cell(
+                    row=row_number,
+                    column=columns["Matching Skills"]
+                ).value,
+                "missing_skills": sheet.cell(
+                    row=row_number,
+                    column=columns["Missing Skills"]
+                ).value,
+                "warnings": sheet.cell(
+                    row=row_number,
+                    column=columns["Warnings"]
+                ).value,
+                "deadline": sheet.cell(
+                    row=row_number,
+                    column=columns["Deadline"]
+                ).value,
+                "url": sheet.cell(
+                    row=row_number,
+                    column=columns["URL"]
+                ).value,
+            })
+
+    workbook.close()
+
+    return jobs
+
+
+def display_jobs(jobs):
+    """Display available jobs."""
+
+    print("=" * 60)
+    print("APPLICATION MANAGER")
+    print("=" * 60)
+    print()
+
+    print(f"Found {len(jobs)} jobs to consider.")
+    print()
+
+    for index, job in enumerate(jobs, start=1):
+
+        print(
+            f"{index}. {job['score']}% — "
+            f"{job['title']} at {job['company']}"
         )
 
-    safe_name = safe_name.strip("-")
+        print(
+            f"   Location: {job['location']}"
+        )
 
-    if not safe_name:
-        safe_name = "application"
+        print(
+            f"   Recommendation: {job['recommendation']}"
+        )
 
-    # Prevent excessively long directory names.
-    safe_name = safe_name[:120]
+        print()
 
-    output_directory = (
-        APPLICATIONS_DIR / safe_name
+
+def display_job_details(job):
+    """Display detailed information about a job."""
+
+    print("-" * 60)
+    print(f"{job['score']}% — {job['title']}")
+    print("-" * 60)
+
+    print(f"Company: {job['company']}")
+    print(f"Location: {job['location']}")
+    print(f"Category: {job['category']}")
+    print(f"Recommendation: {job['recommendation']}")
+    print(f"Role match: {job['role_match'] or 'Not specified'}")
+
+    if job["matching_skills"]:
+        print(
+            f"Matching skills: "
+            f"{job['matching_skills']}"
+        )
+
+    if job["missing_skills"]:
+        print(
+            f"Missing skills: "
+            f"{job['missing_skills']}"
+        )
+
+    if job["warnings"]:
+        print(
+            f"Warnings: "
+            f"{job['warnings']}"
+        )
+
+    print(
+        f"Deadline: "
+        f"{job['deadline'] or 'Not specified'}"
     )
 
-    output_directory.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    print()
+    print(f"Application URL:")
+    print(job["url"])
 
-    return output_directory
+    print("-" * 60)
 
-
-# ============================================================
-# APPLICATION GENERATION
-# ============================================================
-
-def generate_application(
-    job,
-    match=None
-):
-    """
-    Generate a complete application for one job.
-
-    Generates:
-
-        tailored_cv.docx
-        cover_letter.docx
-
-    Returns a dictionary containing the generated files.
-    """
+def prepare_application(job, match=None):
+    """Prepare application documents for a selected job."""
 
     print()
     print("=" * 60)
-    print("GENERATING APPLICATION")
+    print("PREPARING APPLICATION")
     print("=" * 60)
-
     print()
-    print(
-        f"Job: {job.get('title', 'Unknown')}"
-    )
 
     print(
-        f"Company: {job.get('company', 'Unknown')}"
+        f"Preparing application for "
+        f"{job['title']} at {job['company']}"
     )
 
     # --------------------------------------------------------
-    # Create application directory
+    # Load candidate profile through cover letter generator
     # --------------------------------------------------------
 
-    output_directory = create_application_directory(
+    from scripts.cover_letter import (
+        load_candidate_profile
+    )
+
+    profile = load_candidate_profile()
+
+    # --------------------------------------------------------
+    # Select relevant information
+    # --------------------------------------------------------
+
+    skills = select_relevant_skills(
+        profile,
+        job,
+        match
+    )
+
+    experience = select_relevant_experience(
+        profile,
         job
     )
 
-    print()
-    print(
-        f"Application directory:"
-    )
-    print(
-        f"  {output_directory}"
+    projects = select_relevant_projects(
+        profile,
+        job
     )
 
     # --------------------------------------------------------
-    # Generate tailored CV
+    # Display what will be used
     # --------------------------------------------------------
 
     print()
-    print("Generating tailored CV...")
+    print("Selected skills:")
 
-    cv_path = tailor_cv(
-        job,
-        output_directory=output_directory
-    )
+    selected_skills = []
 
-    print(
-        f"✓ CV created:"
-    )
+    for skill_list in skills.values():
+        selected_skills.extend(skill_list)
 
-    print(
-        f"  {cv_path}"
-    )
+    if selected_skills:
+        print(
+            "  " + ", ".join(selected_skills)
+        )
+    else:
+        print("  None")
+
+    print()
+    print("Selected experience:")
+
+    if experience:
+        for item in experience:
+            print(
+                f"  {item.get('title', '')} "
+                f"at {item.get('company', '')}"
+            )
+    else:
+        print("  None")
+
+    print()
+    print("Selected projects:")
+
+    if projects:
+        for project in projects:
+            print(
+                f"  {project.get('name', '')}"
+            )
+    else:
+        print("  None")
 
     # --------------------------------------------------------
     # Generate cover letter
@@ -176,75 +299,226 @@ def generate_application(
 
     cover_letter_path = save_cover_letter(
         job,
-        match=match,
-        output_directory=output_directory
+        match=match
     )
 
+    print()
     print(
-        f"✓ Cover letter created:"
+        f"Cover letter created:"
     )
-
     print(
         f"  {cover_letter_path}"
     )
 
-    # --------------------------------------------------------
-    # Return generated files
-    # --------------------------------------------------------
+    print()
+    print("=" * 60)
+    print("APPLICATION PREPARATION COMPLETE")
+    print("=" * 60)
 
     return {
-        "directory": output_directory,
-        "cv": cv_path,
-        "cover_letter": cover_letter_path,
+        "cover_letter_path": cover_letter_path,
+        "skills": skills,
+        "experience": experience,
+        "projects": projects,
     }
 
+def update_application(job):
+    """Update the selected job with application information."""
 
-# ============================================================
-# TEST
-# ============================================================
+    workbook = load_workbook(TRACKER_FILE)
+    sheet = workbook["Jobs"]
+
+    columns = get_column_indexes(sheet)
+
+    row = job["row"]
+
+    print()
+    print("APPLICATION DETAILS")
+    print()
+
+    cv_version = input(
+        "CV version used "
+        "(e.g. Backend CV v1): "
+    ).strip()
+
+    while not cv_version:
+        print("Please enter a CV version.")
+        cv_version = input(
+            "CV version used: "
+        ).strip()
+
+    cover_letter = input(
+        "Cover letter used? [y/n]: "
+    ).strip().lower()
+
+    while cover_letter not in ["y", "n"]:
+        cover_letter = input(
+            "Please enter y or n: "
+        ).strip().lower()
+
+    cover_letter_value = (
+        "Yes"
+        if cover_letter == "y"
+        else "No"
+    )
+
+    notes = input(
+        "Notes "
+        "(press Enter to skip): "
+    ).strip()
+
+    # Update tracker
+    sheet.cell(
+        row=row,
+        column=columns["Application Status"]
+    ).value = "Applied"
+
+    sheet.cell(
+        row=row,
+        column=columns["CV Version"]
+    ).value = cv_version
+
+    sheet.cell(
+        row=row,
+        column=columns["Cover Letter"]
+    ).value = cover_letter_value
+
+    sheet.cell(
+        row=row,
+        column=columns["Notes"]
+    ).value = notes
+
+    # Add application date to Notes for now.
+    application_date = datetime.now().strftime(
+        "%Y-%m-%d"
+    )
+
+    existing_notes = sheet.cell(
+        row=row,
+        column=columns["Notes"]
+    ).value
+
+    date_note = (
+        f"Applied: {application_date}"
+    )
+
+    if existing_notes:
+        sheet.cell(
+            row=row,
+            column=columns["Notes"]
+        ).value = (
+            f"{date_note} | {existing_notes}"
+        )
+    else:
+        sheet.cell(
+            row=row,
+            column=columns["Notes"]
+        ).value = date_note
+
+    workbook.save(TRACKER_FILE)
+    workbook.close()
+
+    print()
+    print("=" * 60)
+    print("APPLICATION RECORDED")
+    print("=" * 60)
+    print()
+    print(f"Job: {job['title']}")
+    print(f"Company: {job['company']}")
+    print(f"Status: Applied")
+    print(f"CV: {cv_version}")
+    print(f"Cover Letter: {cover_letter_value}")
+    print(f"Date: {application_date}")
+    print()
+
+
+def main():
+
+    jobs = get_jobs_to_apply()
+
+    if not jobs:
+        print("=" * 60)
+        print("APPLICATION MANAGER")
+        print("=" * 60)
+        print()
+        print("No jobs currently require application.")
+        return
+
+    display_jobs(jobs)
+
+    print(
+        "Enter the number of the job you want to process."
+    )
+    print("Enter 0 to exit.")
+    print()
+
+    while True:
+
+        choice = input(
+            "Select job: "
+        ).strip()
+
+        try:
+            choice = int(choice)
+        except ValueError:
+            print("Please enter a number.")
+            continue
+
+        if choice == 0:
+            print("Exiting.")
+            return
+
+        if 1 <= choice <= len(jobs):
+            break
+
+        print(
+            f"Please enter a number between "
+            f"0 and {len(jobs)}."
+        )
+
+    selected_job = jobs[choice - 1]
+
+    print()
+
+    display_job_details(selected_job)
+
+    print()
+    confirm = input(
+        "Have you reviewed this job and want to prepare the application? "
+        "[y/n]: "
+    ).strip().lower()
+
+    if confirm != "y":
+        print()
+        print("Application not prepared.")
+        return
+
+    application = prepare_application(
+        selected_job
+    )
+
+    print()
+    print(
+        "The cover letter has been generated."
+    )
+
+    print()
+    ready = input(
+        "Have you reviewed the generated documents and want to "
+        "record the application? [y/n]: "
+    ).strip().lower()
+
+    if ready != "y":
+        print()
+        print(
+            "Application prepared but not recorded."
+        )
+        return
+
+    update_application(
+        selected_job
+    )
+
 
 if __name__ == "__main__":
-
-    print("=" * 60)
-    print("APPLICATION MANAGER TEST")
-    print("=" * 60)
-
-    test_job = {
-        "title": "Backend Developer",
-        "company": "Test Company",
-        "location": "Nairobi, Kenya",
-        "description": """
-            We are looking for a backend developer with
-            Python, Flask, REST APIs, SQL and Git experience.
-
-            Experience developing APIs and working with
-            databases is preferred.
-        """,
-        "requirements": """
-            Python, Flask, REST APIs, SQL and Git.
-        """,
-    }
-
-    result = generate_application(
-        test_job
-    )
-
-    print()
-    print("=" * 60)
-    print("APPLICATION GENERATED")
-    print("=" * 60)
-
-    print()
-    print(
-        f"Directory: {result['directory']}"
-    )
-
-    print(
-        f"CV: {result['cv']}"
-    )
-
-    print(
-        f"Cover letter: {result['cover_letter']}"
-    )
-
-    print()
+    main()
