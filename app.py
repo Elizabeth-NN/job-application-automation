@@ -37,6 +37,409 @@ st.set_page_config(
 
 
 # ============================================================
+# CARD DESIGN — CSS + HTML RENDERING
+# ============================================================
+#
+# Streamlit's built-in st.container(border=True) / st.metric can't
+# render a score ring, an inline warning banner, or a collapsible
+# skills breakdown. So each job card is split in two:
+#
+#   1. An HTML block (title, ring, warning, badges, skills) drawn
+#      with st.markdown(unsafe_allow_html=True) — this is a fully
+#      self-contained rounded card.
+#   2. Real Streamlit widgets (st.button, st.link_button) placed
+#      directly underneath in their own row. Streamlit doesn't
+#      let custom CSS classes attach to its own containers, so
+#      these sit just below the card rather than fused to it.
+#
+# The CSS below is injected once per page load.
+
+CARD_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+    --paper-raised: #FFFFFF;
+    --ink: #22261F;
+    --ink-soft: #5B5F52;
+    --line: #DEDACB;
+    --moss: #55694A;
+    --moss-soft: #E4E9DC;
+    --amber: #A8631E;
+    --amber-soft: #F3E6D4;
+    --clay: #8A4A3C;
+    --clay-soft: #F1DFD9;
+    --grey: #9A9784;
+    --grey-soft: #E9E7DE;
+}
+
+.jc-card {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px 22px 16px 22px;
+    margin-bottom: 6px;
+    font-family: 'Inter', sans-serif;
+    color: var(--ink);
+}
+
+.jc-card.jc-done { opacity: 0.72; }
+
+.jc-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+.jc-title {
+    font-family: 'Fraunces', serif;
+    font-size: 20px;
+    font-weight: 500;
+    margin: 0 0 4px 0;
+    line-height: 1.25;
+}
+
+.jc-company {
+    font-size: 14px;
+    color: var(--ink-soft);
+    margin: 0;
+}
+
+.jc-company b { color: var(--ink); font-weight: 600; }
+
+.jc-ring-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 4px;
+}
+
+.jc-ring-label {
+    font-size: 10.5px;
+    color: var(--ink-soft);
+}
+
+.jc-ring-pct {
+    font-family: 'Fraunces', serif;
+    font-size: 14px;
+    font-weight: 600;
+    fill: var(--ink);
+}
+
+.jc-warning {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    background: var(--clay-soft);
+    border: 1px solid #E2C4BA;
+    color: var(--clay);
+    border-radius: 7px;
+    padding: 10px 13px;
+    font-size: 13.5px;
+    margin-top: 14px;
+    line-height: 1.4;
+}
+
+.jc-warning svg { flex-shrink: 0; margin-top: 1px; }
+
+.jc-meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 14px;
+}
+
+.jc-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.jc-badge-apply { background: var(--moss-soft); color: var(--moss); }
+.jc-badge-review { background: var(--amber-soft); color: var(--amber); }
+.jc-badge-applied { background: var(--grey-soft); color: var(--ink-soft); }
+.jc-badge-neutral { background: var(--grey-soft); color: var(--ink-soft); }
+
+.jc-card details {
+    margin-top: 14px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+}
+
+.jc-card summary {
+    cursor: pointer;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--moss);
+    list-style: none;
+}
+
+.jc-card summary::-webkit-details-marker { display: none; }
+
+.jc-skills-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 12px;
+    font-size: 13px;
+}
+
+.jc-skills-grid h4 {
+    margin: 0 0 6px 0;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    font-weight: 600;
+}
+
+.jc-pill-list { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.jc-pill {
+    padding: 3px 9px;
+    border-radius: 5px;
+    font-size: 12px;
+}
+
+.jc-pill.jc-have { background: var(--moss-soft); color: var(--moss); }
+.jc-pill.jc-miss { background: var(--grey-soft); color: var(--ink-soft); }
+
+.jc-notes {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin-top: 10px;
+}
+
+/* Streamlit doesn't expose a way to attach a custom class to its
+   own button/column containers, so the action row below each
+   card is a separate block rather than visually fused to it.
+   Tightening the card's bottom margin and the block's own top
+   spacing keeps the two reading as one unit without relying on
+   a selector that can't actually be targeted. */
+div[data-testid="stHorizontalBlock"] {
+    margin-bottom: 22px;
+}
+</style>
+"""
+
+
+def inject_card_css():
+    """
+    Inject the card CSS once per page render.
+    """
+
+    st.markdown(
+        CARD_CSS,
+        unsafe_allow_html=True,
+    )
+
+
+def render_score_ring(score, color="var(--moss)"):
+    """
+    Return an inline SVG ring showing a percentage score.
+    """
+
+    radius = 22
+    circumference = 2 * 3.14159 * radius
+    fraction = max(0, min(score, 100)) / 100
+    offset = circumference * (1 - fraction)
+
+    return f"""
+    <svg width="52" height="52" viewBox="0 0 52 52">
+        <circle cx="26" cy="26" r="{radius}" fill="none" stroke="var(--grey-soft)" stroke-width="5"/>
+        <circle cx="26" cy="26" r="{radius}" fill="none" stroke="{color}" stroke-width="5"
+            stroke-dasharray="{circumference:.1f}" stroke-dashoffset="{offset:.1f}"
+            stroke-linecap="round" transform="rotate(-90 26 26)"/>
+        <text x="26" y="30" text-anchor="middle" class="jc-ring-pct">{score:.0f}%</text>
+    </svg>
+    """
+
+
+def ring_color_for(recommendation):
+    """
+    Pick a ring color based on the recommendation.
+    """
+
+    if recommendation == "APPLY":
+        return "var(--moss)"
+
+    if recommendation == "REVIEW":
+        return "var(--amber)"
+
+    return "var(--grey)"
+
+
+def badge_html(job):
+    """
+    Return the HTML for the status/recommendation badge shown
+    in the card's meta line.
+    """
+
+    status = get_status(job)
+
+    if status == "Applied":
+        applied_note = f"Applied"
+
+        if job.get("notes") and "Applied:" in str(job.get("notes")):
+            # Pull the recorded date out of the notes field, which
+            # record_application() prefixes as "Applied: YYYY-MM-DD".
+            try:
+                applied_note = str(job["notes"]).split("|")[0].strip()
+            except Exception:
+                applied_note = "Applied"
+
+        return f'<span class="jc-badge jc-badge-applied">{applied_note}</span>'
+
+    if status in ("Interview", "Rejected"):
+        return f'<span class="jc-badge jc-badge-neutral">{status}</span>'
+
+    recommendation = job.get("recommendation")
+
+    if recommendation == "APPLY":
+        return '<span class="jc-badge jc-badge-apply">Apply</span>'
+
+    if recommendation == "REVIEW":
+        return '<span class="jc-badge jc-badge-review">Review</span>'
+
+    return '<span class="jc-badge jc-badge-neutral">Not specified</span>'
+
+
+def warning_html(job):
+    """
+    Return the HTML for the surfaced warning banner, or an empty
+    string if the job has no warnings.
+    """
+
+    warnings = job.get("warnings")
+
+    if not warnings:
+        return ""
+
+    return f"""
+    <div class="jc-warning">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        </svg>
+        <span>{warnings}</span>
+    </div>
+    """
+
+
+def skills_pills(skills_text, pill_class):
+    """
+    Turn a comma-separated skills string into a row of pills.
+    """
+
+    if not skills_text:
+        return '<span class="jc-pill jc-miss">None listed</span>'
+
+    items = [
+        item.strip()
+        for item in str(skills_text).split(",")
+        if item.strip()
+    ]
+
+    return "".join(
+        f'<span class="jc-pill {pill_class}">{item}</span>'
+        for item in items
+    )
+
+
+def skills_details_html(job):
+    """
+    Return the collapsible skills-breakdown block.
+    """
+
+    matching = skills_pills(job.get("matching_skills"), "jc-have")
+    missing = skills_pills(job.get("missing_skills"), "jc-miss")
+
+    return f"""
+    <details>
+        <summary>▸ Skills breakdown</summary>
+        <div class="jc-skills-grid">
+            <div>
+                <h4>Matching</h4>
+                <div class="jc-pill-list">{matching}</div>
+            </div>
+            <div>
+                <h4>Missing</h4>
+                <div class="jc-pill-list">{missing}</div>
+            </div>
+        </div>
+    </details>
+    """
+
+
+def flatten_html(html):
+    """
+    Remove leading whitespace from every line of an HTML string.
+
+    Streamlit's st.markdown() runs standard Markdown parsing before
+    rendering unsafe HTML, and Markdown treats any line indented by
+    4+ spaces as a literal code block rather than as HTML to parse.
+    Since the HTML fragments below are built inside indented Python
+    functions, every line inherits that indentation — so without
+    this step, chunks of the card render as raw escaped tags instead
+    of the styled card.
+    """
+
+    return "\n".join(
+        line.strip()
+        for line in html.strip().splitlines()
+    )
+
+
+def render_job_card_html(job, extra_meta=""):
+    """
+    Render the top (non-interactive) portion of a job card:
+    title, company, score ring, warning banner, status badge,
+    meta line, and the collapsible skills breakdown.
+
+    extra_meta is an optional string of additional <span> meta
+    items to append to the meta line (e.g. CV version used).
+    """
+
+    score = get_score(job)
+    ring_color = ring_color_for(job.get("recommendation"))
+    is_done = get_status(job) in ("Applied", "Rejected")
+    card_class = "jc-card jc-done" if is_done else "jc-card"
+
+    deadline = job.get("deadline") or "No deadline listed"
+    posted = job.get("posted") or "Posting date not specified"
+
+    html = f"""
+    <div class="{card_class}">
+        <div class="jc-row-top">
+            <div>
+                <p class="jc-title">{job.get('title') or 'Untitled role'}</p>
+                <p class="jc-company"><b>{job.get('company') or 'Unknown company'}</b> · {job.get('location') or 'Location not specified'}</p>
+            </div>
+            <div class="jc-ring-wrap">
+                {render_score_ring(score, ring_color)}
+                <span class="jc-ring-label">match</span>
+            </div>
+        </div>
+        {warning_html(job)}
+        <div class="jc-meta">
+            {badge_html(job)}
+            <span>{posted}</span>
+            <span>{deadline}</span>
+            {extra_meta}
+        </div>
+        {skills_details_html(job)}
+    </div>
+    """
+
+    return flatten_html(html)
+
+
+# ============================================================
 # TRACKER FUNCTIONS
 # ============================================================
 
@@ -70,41 +473,41 @@ def load_jobs():
         if cell.value:
             columns[cell.value] = cell.column
 
+    def get_value(sheet, row_number, column_name):
+        column = columns.get(column_name)
+
+        if not column:
+            return ""
+
+        return sheet.cell(
+            row=row_number,
+            column=column,
+        ).value
+
     jobs = []
 
     for row_number in range(2, sheet.max_row + 1):
 
-        def get_value(column_name):
-            column = columns.get(column_name)
-
-            if not column:
-                return ""
-
-            return sheet.cell(
-                row=row_number,
-                column=column,
-            ).value
-
         job = {
             "row": row_number,
-            "date_found": get_value("Date Found"),
-            "title": get_value("Job Title"),
-            "company": get_value("Company"),
-            "location": get_value("Location"),
-            "score": get_value("Score"),
-            "category": get_value("Category"),
-            "recommendation": get_value("Recommendation"),
-            "role_match": get_value("Role Match"),
-            "matching_skills": get_value("Matching Skills"),
-            "missing_skills": get_value("Missing Skills"),
-            "warnings": get_value("Warnings"),
-            "posted": get_value("Posted"),
-            "deadline": get_value("Deadline"),
-            "url": get_value("URL"),
-            "application_status": get_value("Application Status"),
-            "cv_version": get_value("CV Version"),
-            "cover_letter": get_value("Cover Letter"),
-            "notes": get_value("Notes"),
+            "date_found": get_value(sheet, row_number, "Date Found"),
+            "title": get_value(sheet, row_number, "Job Title"),
+            "company": get_value(sheet, row_number, "Company"),
+            "location": get_value(sheet, row_number, "Location"),
+            "score": get_value(sheet, row_number, "Score"),
+            "category": get_value(sheet, row_number, "Category"),
+            "recommendation": get_value(sheet, row_number, "Recommendation"),
+            "role_match": get_value(sheet, row_number, "Role Match"),
+            "matching_skills": get_value(sheet, row_number, "Matching Skills"),
+            "missing_skills": get_value(sheet, row_number, "Missing Skills"),
+            "warnings": get_value(sheet, row_number, "Warnings"),
+            "posted": get_value(sheet, row_number, "Posted"),
+            "deadline": get_value(sheet, row_number, "Deadline"),
+            "url": get_value(sheet, row_number, "URL"),
+            "application_status": get_value(sheet, row_number, "Application Status"),
+            "cv_version": get_value(sheet, row_number, "CV Version"),
+            "cover_letter": get_value(sheet, row_number, "Cover Letter"),
+            "notes": get_value(sheet, row_number, "Notes"),
         }
 
         # Ignore completely empty rows.
@@ -357,6 +760,14 @@ page = st.sidebar.radio(
 # LOAD DATA
 # ============================================================
 
+inject_card_css()
+
+if not TRACKER_FILE.exists():
+    st.error(
+        f"Tracker file not found at `{TRACKER_FILE}`. "
+        "Add a job_tracker.xlsx with a 'Jobs' worksheet to get started."
+    )
+
 jobs = load_jobs()
 
 
@@ -515,46 +926,30 @@ if page == "Dashboard":
 
         for job in pending_jobs[:5]:
 
-            score = get_score(job)
+            st.markdown(
+                render_job_card_html(job),
+                unsafe_allow_html=True,
+            )
 
-            with st.container(
-                border=True
-            ):
+            col1, col2 = st.columns([1, 1])
 
-                col1, col2, col3 = st.columns(
-                    [5, 2, 2]
+            with col1:
+                if job["url"]:
+                    st.link_button(
+                        "Open listing",
+                        job["url"],
+                        use_container_width=True,
+                    )
+            with col2:
+                st.button(
+                    "Go to Jobs to prepare",
+                    key=f"dash_prepare_{job['row']}",
+                    disabled=True,
+                    use_container_width=True,
+                    help="Open the Jobs page to prepare this application.",
                 )
 
-                with col1:
-
-                    st.markdown(
-                        f"### {job['title']}"
-                    )
-
-                    st.write(
-                        f"**{job['company']}**"
-                    )
-
-                with col2:
-
-                    st.metric(
-                        "Match",
-                        f"{score:.0f}%",
-                    )
-
-                    st.write(
-                        f"📍 {job['location']}"
-                    )
-
-                with col3:
-
-                    st.write(
-                        "**Recommendation**"
-                    )
-
-                    st.write(
-                        job["recommendation"]
-                    )
+            st.write("")
 
     else:
 
@@ -762,7 +1157,7 @@ elif page == "Jobs":
 
         st.dataframe(
             table_data,
-            width=True,
+            use_container_width=True,
             hide_index=True,
         )
 
@@ -780,155 +1175,45 @@ elif page == "Jobs":
             filtered_jobs
         ):
 
-            score = get_score(job)
+            # ------------------------------------------------
+            # Card info block (title, ring, warning, skills)
+            # ------------------------------------------------
 
-            with st.container(
-                border=True
-            ):
+            st.markdown(
+                render_job_card_html(job),
+                unsafe_allow_html=True,
+            )
 
-                # ------------------------------------------------
-                # Header
-                # ------------------------------------------------
+            # ------------------------------------------------
+            # Actions — real Streamlit widgets, styled to sit
+            # flush under the HTML block above.
+            # ------------------------------------------------
 
-                col1, col2, col3, col4 = st.columns(
-                    [5, 2, 2, 2]
-                )
+            can_prepare = (
+                get_status(job)
+                not in [
+                    "Applied",
+                    "Rejected",
+                ]
+            )
+
+            action_container = st.container()
+
+            with action_container:
+
+                col1, col2 = st.columns([1, 1])
 
                 with col1:
-
-                    st.markdown(
-                        f"### {job['title']}"
-                    )
-
-                    st.write(
-                        f"**{job['company']}**"
-                    )
-
-                with col2:
-
-                    st.metric(
-                        "Match",
-                        f"{score:.0f}%",
-                    )
-
-                with col3:
-
-                    st.write(
-                        "**Location**"
-                    )
-
-                    st.write(
-                        job["location"]
-                        or "Not specified"
-                    )
-
-                with col4:
-
-                    st.write(
-                        "**Recommendation**"
-                    )
-
-                    st.write(
-                        job["recommendation"]
-                        or "Not specified"
-                    )
-
-                # ------------------------------------------------
-                # Basic information
-                # ------------------------------------------------
-
-                info_col1, info_col2, info_col3 = st.columns(
-                    3
-                )
-
-                with info_col1:
-
-                    st.write(
-                        f"**Role Match:** "
-                        f"{job['role_match'] or 'Not specified'}"
-                    )
-
-                with info_col2:
-
-                    st.write(
-                        f"**Deadline:** "
-                        f"{job['deadline'] or 'Not specified'}"
-                    )
-
-                with info_col3:
-
-                    st.write(
-                        f"**Status:** "
-                        f"{get_status(job)}"
-                    )
-
-                # ------------------------------------------------
-                # Details
-                # ------------------------------------------------
-
-                with st.expander(
-                    "View Job Details"
-                ):
-
-                    st.write(
-                        f"**Matching Skills:** "
-                        f"{job['matching_skills'] or 'None'}"
-                    )
-
-                    st.write(
-                        f"**Missing Skills:** "
-                        f"{job['missing_skills'] or 'None'}"
-                    )
-
-                    st.write(
-                        f"**Warnings:** "
-                        f"{job['warnings'] or 'None'}"
-                    )
-
-                    st.write(
-                        f"**Posted:** "
-                        f"{job['posted'] or 'Not specified'}"
-                    )
-
-                    st.write(
-                        f"**Application Status:** "
-                        f"{get_status(job)}"
-                    )
-
-                    if job["notes"]:
-
-                        st.write(
-                            f"**Notes:** "
-                            f"{job['notes']}"
-                        )
-
-                # ------------------------------------------------
-                # Actions
-                # ------------------------------------------------
-
-                action_col1, action_col2 = st.columns(
-                    [1, 1]
-                )
-
-                with action_col1:
 
                     if job["url"]:
 
                         st.link_button(
-                            "🔗 Open Job Listing",
+                            "Open listing",
                             job["url"],
-                            width=True,
+                            use_container_width=True,
                         )
 
-                with action_col2:
-
-                    can_prepare = (
-                        get_status(job)
-                        not in [
-                            "Applied",
-                            "Rejected",
-                        ]
-                    )
+                with col2:
 
                     if can_prepare:
 
@@ -937,10 +1222,10 @@ elif page == "Jobs":
                         )
 
                         if st.button(
-                            "📄 Prepare Application",
+                            "Prepare application",
                             key=prepare_key,
                             type="primary",
-                            width=True,
+                            use_container_width=True,
                         ):
 
                             with st.spinner(
@@ -970,28 +1255,31 @@ elif page == "Jobs":
 
                     else:
 
-                        st.info(
-                            "Application already processed."
+                        st.button(
+                            "Already applied",
+                            key=f"done_{job['row']}",
+                            disabled=True,
+                            use_container_width=True,
                         )
 
-                # ------------------------------------------------
-                # Show generated documents if this is the job
-                # ------------------------------------------------
+            # ------------------------------------------------
+            # Show generated documents if this is the job
+            # ------------------------------------------------
 
-                last_application = (
-                    st.session_state.get(
-                        "last_application"
-                    )
+            last_application = (
+                st.session_state.get(
+                    "last_application"
                 )
+            )
 
-                if (
-                    last_application
-                    and last_application.get(
-                        "job_row"
-                    ) == job["row"]
-                ):
+            if (
+                last_application
+                and last_application.get(
+                    "job_row"
+                ) == job["row"]
+            ):
 
-                    st.divider()
+                with st.container(border=True):
 
                     st.success(
                         "Application documents are ready."
@@ -1040,6 +1328,8 @@ elif page == "Jobs":
                         "Review the generated CV and cover letter "
                         "before marking the application as submitted."
                     )
+
+            st.write("")  # small breathing room between cards
 
 
 # ============================================================
@@ -1223,7 +1513,7 @@ elif page == "Applications":
         if st.button(
             "✅ Mark as Applied",
             type="primary",
-            width=True,
+            use_container_width=True,
         ):
 
             # ------------------------------------------------
@@ -1304,58 +1594,37 @@ elif page == "Applications":
 
         for job in applied_jobs:
 
-            with st.container(
-                border=True
-            ):
+            extra_meta = (
+                f'<span>CV: {job["cv_version"] or "Not specified"}</span>'
+                f'<span>Cover letter: {job["cover_letter"] or "No"}</span>'
+            )
 
-                st.markdown(
-                    f"### {job['title']}"
-                )
+            st.markdown(
+                render_job_card_html(job, extra_meta=extra_meta),
+                unsafe_allow_html=True,
+            )
 
-                st.write(
-                    f"**{job['company']}**"
-                )
+            with st.container():
 
-                col1, col2, col3, col4 = st.columns(
-                    4
-                )
+                col1, col2 = st.columns([1, 1])
 
                 with col1:
 
-                    st.write(
-                        f"**Match:** "
-                        f"{get_score(job):.0f}%"
-                    )
+                    if job["url"]:
+
+                        st.link_button(
+                            "Open listing",
+                            job["url"],
+                            use_container_width=True,
+                        )
 
                 with col2:
 
-                    st.write(
-                        f"**Location:** "
-                        f"{job['location'] or 'Not specified'}"
+                    st.button(
+                        "Already applied",
+                        key=f"submitted_{job['row']}",
+                        disabled=True,
+                        use_container_width=True,
                     )
 
-                with col3:
-
-                    st.write(
-                        f"**CV:** "
-                        f"{job['cv_version'] or 'Not specified'}"
-                    )
-
-                with col4:
-
-                    st.write(
-                        f"**Cover Letter:** "
-                        f"{job['cover_letter'] or 'No'}"
-                    )
-
-                st.write(
-                    f"**Notes:** "
-                    f"{job['notes'] or 'None'}"
-                )
-
-                if job["url"]:
-
-                    st.link_button(
-                        "🔗 Open Job Listing",
-                        job["url"],
-                    )
+            st.write("")
