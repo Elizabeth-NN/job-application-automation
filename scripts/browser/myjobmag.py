@@ -1,10 +1,21 @@
+
 """
 MyJobMag browser automation.
 
 Uses Playwright to inspect MyJobMag job listings and
 determine how applications are handled.
 
-This module does NOT submit applications.
+Browser lifecycle is intentionally kept separate from the
+reusable MyJobMag functions.
+
+Reusable functions:
+    collect_job_links(page)
+    extract_application_subject(body_text, page)
+    detect_application_method(page)
+    inspect_job(page, job_url)
+
+The browser is only launched/closed by open_myjobmag()
+when this file is run directly as a test.
 """
 
 import re
@@ -17,18 +28,46 @@ from scripts.browser.browser import (
 
 
 # ============================================================
-# URLS
+# CONSTANTS
 # ============================================================
 
 BASE_URL = "https://www.myjobmag.co.ke"
 
 MYJOBMAG_URL = (
-    f"{BASE_URL}/jobs-by-title/developer-python"
+    f"{BASE_URL}/"
+    "jobs-by-title/developer-python"
 )
 
 TEST_JOB_URL = (
-    f"{BASE_URL}/job/fullstack-developer-itravel-holidays"
+    f"{BASE_URL}/"
+    "job/fullstack-developer-itravel-holidays"
 )
+
+
+# ============================================================
+# URL HELPERS
+# ============================================================
+
+def make_absolute_url(href):
+    """
+    Convert a MyJobMag relative URL into an absolute URL.
+
+    Examples:
+
+        /job/example
+        -> https://www.myjobmag.co.ke/job/example
+
+        https://example.com/job
+        -> unchanged
+    """
+
+    if not href:
+        return None
+
+    return urljoin(
+        BASE_URL,
+        href,
+    )
 
 
 # ============================================================
@@ -39,8 +78,15 @@ def collect_job_links(page):
     """
     Find job listing links on the current MyJobMag page.
 
+    Parameters:
+        page: Existing Playwright Page object.
+
     Returns:
-        list[dict]: Job title and URL.
+        List of dictionaries containing:
+            title
+            url
+
+    This function does NOT launch or close a browser.
     """
 
     job_links = []
@@ -56,13 +102,14 @@ def collect_job_links(page):
             if not href or not title:
                 continue
 
+            # Only collect actual MyJobMag job URLs.
             if "/job/" not in href:
                 continue
 
-            job_url = urljoin(
-                BASE_URL,
-                href,
-            )
+            job_url = make_absolute_url(href)
+
+            if not job_url:
+                continue
 
             job_links.append(
                 {
@@ -74,9 +121,9 @@ def collect_job_links(page):
         except Exception:
             continue
 
-    # --------------------------------------------------------
-    # Remove duplicate URLs
-    # --------------------------------------------------------
+    # ========================================================
+    # REMOVE DUPLICATES
+    # ========================================================
 
     unique_jobs = []
     seen_urls = set()
@@ -105,20 +152,25 @@ def extract_application_subject(
     Try to determine the email subject requested
     by the employer.
 
-    If no explicit subject is found, use the
-    main job heading as a fallback.
+    If an explicit subject is found, return it.
+
+    Otherwise, use the main job heading as a fallback.
+
+    This function does not interact with the browser
+    beyond reading the current page.
     """
 
     lines = body_text.splitlines()
 
-    # --------------------------------------------------------
-    # Explicit subject patterns
-    # --------------------------------------------------------
+    # ========================================================
+    # EXPLICIT SUBJECT PATTERNS
+    # ========================================================
 
     subject_patterns = [
         r"subject\s*:\s*(.+)",
+        r"subject\s*[-–—]\s*(.+)",
         r"email\s+subject\s*:\s*(.+)",
-        r"use\s+the\s+position\s+as\s+subject",
+        r"position\s+as\s+subject\s*:\s*(.+)",
         r"using\s+the\s+position\s+as\s+subject",
     ]
 
@@ -137,35 +189,24 @@ def extract_application_subject(
                 flags=re.IGNORECASE,
             )
 
-            if match and match.groups():
+            if not match:
+                continue
+
+            # Some patterns contain a captured subject.
+            if match.groups():
 
                 subject = match.group(1).strip()
 
                 if subject:
                     return subject
 
-    # --------------------------------------------------------
-    # Check nearby lines for "subject"
-    # --------------------------------------------------------
+            # If the instruction only says
+            # "using the position as subject", we continue
+            # and use the job heading as the fallback.
 
-    for index, line in enumerate(lines):
-
-        normalized = line.strip().lower()
-
-        if "subject" not in normalized:
-            continue
-
-        # If the next line contains the subject.
-        if index + 1 < len(lines):
-
-            next_line = lines[index + 1].strip()
-
-            if next_line:
-                return next_line
-
-    # --------------------------------------------------------
-    # Fall back to job heading
-    # --------------------------------------------------------
+    # ========================================================
+    # FALLBACK TO JOB HEADING
+    # ========================================================
 
     headings = page.locator(
         "h1, h2"
@@ -177,26 +218,221 @@ def extract_application_subject(
 
             text = heading.inner_text().strip()
 
-            if text:
+            if not text:
+                continue
 
-                # Prefer the actual job title rather than
-                # generic headings.
-                if not any(
-                    phrase in text.lower()
-                    for phrase in [
-                        "send this job",
-                        "did you notice",
-                        "related companies",
-                        "career advice",
-                    ]
-                ):
+            # Prefer an actual job title over generic headings.
+            generic_headings = {
+                "send this job to a friend",
+                "did you notice an error or suspect this job is scam? tell us.",
+                "method of application",
+                "send your application",
+                "related companies hiring now",
+                "career advice",
+                "subscribe to job alert",
+            }
 
-                    return text
+            if text.lower() in generic_headings:
+                continue
+
+            return text
 
         except Exception:
             continue
 
     return None
+
+
+# ============================================================
+# EXTRACT EMAILS
+# ============================================================
+
+def extract_emails(body_text):
+    """
+    Extract email addresses from page text.
+
+    Returns:
+        List of email addresses.
+    """
+
+    email_pattern = (
+        r"\b[A-Z0-9._%+-]+"
+        r"@[A-Z0-9.-]+\.[A-Z]{2,}\b"
+    )
+
+    emails = re.findall(
+        email_pattern,
+        body_text,
+        flags=re.IGNORECASE,
+    )
+
+    # Remove duplicates while preserving order.
+    unique_emails = []
+
+    seen = set()
+
+    for email in emails:
+
+        normalized = email.lower()
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+        unique_emails.append(email)
+
+    return unique_emails
+
+
+# ============================================================
+# DETECT EMAIL APPLICATION
+# ============================================================
+
+def detect_email_application(
+    body_text,
+    page,
+):
+    """
+    Detect an employer email application.
+
+    Returns:
+        Dictionary if an email application is detected,
+        otherwise None.
+    """
+
+    normalized_text = body_text.lower()
+
+    emails = extract_emails(
+        body_text
+    )
+
+    if not emails:
+        return None
+
+    application_terms = [
+        "method of application",
+        "send your application",
+        "send your cv",
+        "send application",
+        "email your cv",
+        "forward your cv",
+        "submit your cv",
+        "apply via email",
+        "send your resume",
+        "forward your resume",
+        "email your resume",
+        "using the position as subject",
+    ]
+
+    has_email_instruction = any(
+        term in normalized_text
+        for term in application_terms
+    )
+
+    if not has_email_instruction:
+        return None
+
+    return {
+        "method": "email",
+        "email": emails[0],
+        "subject": extract_application_subject(
+            body_text,
+            page,
+        ),
+        "url": None,
+    }
+
+
+# ============================================================
+# DETECT APPLICATION LINKS
+# ============================================================
+
+def find_application_links(page):
+    """
+    Find links that appear to be related to applying
+    for the current job.
+
+    Returns:
+        List of dictionaries:
+
+            {
+                "text": "...",
+                "url": "..."
+            }
+    """
+
+    application_links = []
+
+    links = page.locator(
+        "a"
+    ).all()
+
+    application_words = [
+        "apply",
+        "application",
+        "career",
+        "careers",
+        "submit",
+    ]
+
+    for link in links:
+
+        try:
+
+            text = link.inner_text().strip()
+
+            href = link.get_attribute(
+                "href"
+            )
+
+            if not href:
+                continue
+
+            combined = (
+                f"{text} {href}"
+            ).lower()
+
+            if not any(
+                word in combined
+                for word in application_words
+            ):
+                continue
+
+            absolute_url = make_absolute_url(
+                href
+            )
+
+            application_links.append(
+                {
+                    "text": text,
+                    "url": absolute_url,
+                }
+            )
+
+        except Exception:
+            continue
+
+    # ========================================================
+    # REMOVE DUPLICATES
+    # ========================================================
+
+    unique_links = []
+    seen_urls = set()
+
+    for link in application_links:
+
+        url = link["url"]
+
+        if url in seen_urls:
+            continue
+
+        seen_urls.add(url)
+
+        unique_links.append(
+            link
+        )
+
+    return unique_links
 
 
 # ============================================================
@@ -214,137 +450,89 @@ def detect_application_method(page):
         on_site
         unknown
 
+    Priority:
+
+        1. Explicit employer email instruction
+        2. MyJobMag on-site application
+        3. External application
+        4. Unknown
+
     This function only detects the method.
+
     It does NOT submit an application.
+    It does NOT launch or close the browser.
     """
 
     body_text = page.locator(
         "body"
     ).inner_text()
 
-    normalized_text = body_text.lower()
-
     # ========================================================
     # 1. EMAIL APPLICATION
     # ========================================================
 
-    email_pattern = (
-        r"\b[A-Z0-9._%+-]+"
-        r"@[A-Z0-9.-]+\.[A-Z]{2,}\b"
-    )
-
-    emails = re.findall(
-        email_pattern,
+    email_application = detect_email_application(
         body_text,
-        flags=re.IGNORECASE,
+        page,
     )
 
-    if emails:
+    if email_application:
 
-        application_terms = [
-            "method of application",
-            "send your application",
-            "send your cv",
-            "send application",
-            "email your cv",
-            "forward your cv",
-            "submit your cv",
-            "apply via email",
-            "forward application",
-            "email your application",
-        ]
-
-        has_email_instruction = any(
-            term in normalized_text
-            for term in application_terms
-        )
-
-        if has_email_instruction:
-
-            return {
-                "method": "email",
-                "email": emails[0],
-                "subject": extract_application_subject(
-                    body_text,
-                    page,
-                ),
-                "url": None,
-            }
+        return email_application
 
     # ========================================================
     # 2. APPLICATION LINKS
     # ========================================================
 
-    application_links = page.locator(
-        "a"
-    ).all()
+    application_links = find_application_links(
+        page
+    )
+
+    # --------------------------------------------------------
+    # First look for MyJobMag on-site application.
+    # --------------------------------------------------------
 
     for link in application_links:
 
-        try:
+        href = link["url"]
 
-            text = link.inner_text().strip()
-
-            href = link.get_attribute(
-                "href"
-            )
-
-            if not href:
-                continue
-
-            normalized_link_text = text.lower()
-
-            # Only consider links that actually look like
-            # application links.
-            if not any(
-                word in normalized_link_text
-                for word in [
-                    "apply",
-                    "application",
-                    "submit",
-                ]
-            ):
-
-                continue
-
-            href = urljoin(
-                BASE_URL,
-                href,
-            )
-
-            # ------------------------------------------------
-            # MyJobMag on-site application
-            # ------------------------------------------------
-
-            if "/job-application/" in href:
-
-                return {
-                    "method": "on_site",
-                    "email": None,
-                    "subject": None,
-                    "url": href,
-                }
-
-            # ------------------------------------------------
-            # External application
-            # ------------------------------------------------
-
-            if (
-                href.startswith("http://")
-                or href.startswith("https://")
-            ):
-
-                if "myjobmag.co.ke" not in href:
-
-                    return {
-                        "method": "external",
-                        "email": None,
-                        "subject": None,
-                        "url": href,
-                    }
-
-        except Exception:
+        if not href:
             continue
+
+        if "/job-application/" in href:
+
+            return {
+                "method": "on_site",
+                "email": None,
+                "subject": None,
+                "url": href,
+            }
+
+    # --------------------------------------------------------
+    # Then look for external application.
+    # --------------------------------------------------------
+
+    for link in application_links:
+
+        href = link["url"]
+
+        if not href:
+            continue
+
+        if not (
+            href.startswith("http://")
+            or href.startswith("https://")
+        ):
+            continue
+
+        if "myjobmag.co.ke" not in href:
+
+            return {
+                "method": "external",
+                "email": None,
+                "subject": None,
+                "url": href,
+            }
 
     # ========================================================
     # 3. UNKNOWN
@@ -359,283 +547,89 @@ def detect_application_method(page):
 
 
 # ============================================================
-# INSPECT JOB
+# EXTRACT PAGE HEADINGS
 # ============================================================
 
-def inspect_job(page, job_url):
+def extract_headings(page):
     """
-    Open a specific MyJobMag job and inspect its
-    application mechanism.
+    Extract h1, h2 and h3 headings from the current page.
 
-    Nothing is submitted.
+    Returns:
+        List of heading strings.
     """
 
-    print()
-    print("=" * 60)
-    print("INSPECTING JOB")
-    print("=" * 60)
+    headings = []
 
-    print()
-    print(f"URL: {job_url}")
-
-    # --------------------------------------------------------
-    # Navigate to the job
-    # --------------------------------------------------------
-
-    response = page.goto(
-        job_url,
-        wait_until="commit",
-        timeout=30000,
-    )
-
-    print(
-        "Job navigation started."
-    )
-
-    # --------------------------------------------------------
-    # Wait for page
-    # --------------------------------------------------------
-
-    try:
-
-        page.wait_for_load_state(
-            "domcontentloaded",
-            timeout=15000,
-        )
-
-        print(
-            "Job page loaded."
-        )
-
-    except Exception:
-
-        print(
-            "Page did not reach domcontentloaded "
-            "within 15 seconds, continuing anyway."
-        )
-
-    # --------------------------------------------------------
-    # Status
-    # --------------------------------------------------------
-
-    if response:
-
-        print(
-            f"Status: {response.status}"
-        )
-
-    # --------------------------------------------------------
-    # Page title
-    # --------------------------------------------------------
-
-    print(
-        f"Page title: {page.title()}"
-    )
-
-    # ========================================================
-    # APPLICATION METHOD
-    # ========================================================
-
-    print()
-    print(
-        "APPLICATION METHOD"
-    )
-
-    print(
-        "-" * 60
-    )
-
-    application = detect_application_method(
-        page
-    )
-
-    print(
-        f"Method: {application['method']}"
-    )
-
-    if application["email"]:
-
-        print(
-            f"Email: {application['email']}"
-        )
-
-    if application["subject"]:
-
-        print(
-            f"Subject: {application['subject']}"
-        )
-
-    if application["url"]:
-
-        print(
-            f"Application URL: {application['url']}"
-        )
-
-    # ========================================================
-    # HEADINGS
-    # ========================================================
-
-    print()
-    print(
-        "HEADINGS"
-    )
-
-    print(
-        "-" * 60
-    )
-
-    headings = page.locator(
+    elements = page.locator(
         "h1, h2, h3"
     ).all()
 
-    for heading in headings:
+    for element in elements:
 
         try:
 
-            text = heading.inner_text().strip()
+            text = element.inner_text().strip()
 
             if text:
-
-                print(
-                    f"• {text}"
-                )
+                headings.append(text)
 
         except Exception:
             continue
 
-    # ========================================================
-    # BUTTONS
-    # ========================================================
+    return headings
 
-    print()
-    print(
-        "BUTTONS"
-    )
 
-    print(
-        "-" * 60
-    )
+# ============================================================
+# EXTRACT BUTTONS
+# ============================================================
 
-    buttons = page.locator(
+def extract_buttons(page):
+    """
+    Extract visible button text from the current page.
+
+    Returns:
+        List of button labels.
+    """
+
+    buttons = []
+
+    elements = page.locator(
         "button"
     ).all()
 
-    for button in buttons:
+    for element in elements:
 
         try:
 
-            text = button.inner_text().strip()
+            text = element.inner_text().strip()
 
             if text:
-
-                print(
-                    f"• {text}"
-                )
+                buttons.append(text)
 
         except Exception:
             continue
 
-    # ========================================================
-    # APPLICATION-RELATED LINKS
-    # ========================================================
+    return buttons
 
-    print()
-    print(
-        "APPLICATION-RELATED LINKS"
-    )
 
-    print(
-        "-" * 60
-    )
+# ============================================================
+# INSPECT APPLICATION TEXT
+# ============================================================
 
-    links = page.locator(
-        "a"
-    ).all()
+def extract_application_text(
+    body_text,
+):
+    """
+    Extract useful sections around application-related
+    text from a MyJobMag job page.
 
-    application_words = [
-        "apply",
-        "application",
-        "career",
-        "careers",
-        "submit",
-    ]
-
-    found_application_links = []
-
-    for link in links:
-
-        try:
-
-            text = link.inner_text().strip()
-
-            href = link.get_attribute(
-                "href"
-            )
-
-            if not href:
-                continue
-
-            href = urljoin(
-                BASE_URL,
-                href,
-            )
-
-            combined = (
-                f"{text} {href}"
-            ).lower()
-
-            if any(
-                word in combined
-                for word in application_words
-            ):
-
-                found_application_links.append(
-                    {
-                        "text": text,
-                        "url": href,
-                    }
-                )
-
-        except Exception:
-            continue
-
-    if found_application_links:
-
-        for link in found_application_links:
-
-            print(
-                f"• {link['text']}"
-            )
-
-            print(
-                f"  {link['url']}"
-            )
-
-    else:
-
-        print(
-            "No obvious application links found."
-        )
-
-    # ========================================================
-    # APPLICATION TEXT
-    # ========================================================
-
-    print()
-    print(
-        "APPLICATION TEXT SEARCH"
-    )
-
-    print(
-        "-" * 60
-    )
-
-    body_text = page.locator(
-        "body"
-    ).inner_text()
+    Returns:
+        List of text sections.
+    """
 
     lines = body_text.splitlines()
 
+    sections = []
     printed_sections = set()
 
     for index, line in enumerate(lines):
@@ -666,12 +660,9 @@ def inspect_job(page, job_url):
                 start:end
             ]:
 
-                cleaned = (
-                    surrounding_line.strip()
-                )
+                cleaned = surrounding_line.strip()
 
                 if cleaned:
-
                     section.append(
                         cleaned
                     )
@@ -680,46 +671,346 @@ def inspect_job(page, job_url):
                 section
             )
 
-            if section_text in printed_sections:
+            if not section_text:
+                continue
 
+            if section_text in printed_sections:
                 continue
 
             printed_sections.add(
                 section_text
             )
 
-            for cleaned in section:
+            sections.append(
+                section_text
+            )
 
-                print(
-                    cleaned
-                )
+    return sections
+
+
+# ============================================================
+# INSPECT JOB
+# ============================================================
+
+def inspect_job(
+    page,
+    job_url,
+    verbose=True,
+):
+    """
+    Open a specific MyJobMag job and inspect its
+    application mechanism.
+
+    Parameters:
+        page:
+            Existing Playwright Page object.
+
+        job_url:
+            MyJobMag job URL.
+
+        verbose:
+            If True, print inspection details.
+
+    Returns:
+        Dictionary containing:
+
+            {
+                "url": ...,
+                "title": ...,
+                "application_links": [...],
+                "application": {...},
+                "headings": [...],
+                "buttons": [...],
+                "application_text": [...]
+            }
+
+    Nothing is submitted.
+
+    This function does NOT launch or close the browser.
+    """
+
+    if verbose:
+
+        print()
+        print("=" * 60)
+        print("INSPECTING JOB")
+        print("=" * 60)
+
+        print()
+        print(f"URL: {job_url}")
+
+    # ========================================================
+    # NAVIGATE
+    # ========================================================
+
+    response = page.goto(
+        job_url,
+        wait_until="commit",
+        timeout=30000,
+    )
+
+    if verbose:
+        print("Job navigation started.")
+
+    # ========================================================
+    # WAIT FOR PAGE
+    # ========================================================
+
+    try:
+
+        page.wait_for_load_state(
+            "domcontentloaded",
+            timeout=15000,
+        )
+
+        if verbose:
+            print("Job page loaded.")
+
+    except Exception:
+
+        if verbose:
 
             print(
-                "-" * 40
+                "Page did not reach domcontentloaded "
+                "within 15 seconds, continuing anyway."
             )
 
     # ========================================================
-    # RETURN INFORMATION
+    # RESPONSE STATUS
+    # ========================================================
+
+    status = None
+
+    if response:
+
+        status = response.status
+
+        if verbose:
+            print(
+                f"Status: {status}"
+            )
+
+    # ========================================================
+    # PAGE TITLE
+    # ========================================================
+
+    page_title = page.title()
+
+    if verbose:
+
+        print(
+            f"Page title: {page_title}"
+        )
+
+    # ========================================================
+    # PAGE TEXT
+    # ========================================================
+
+    body_text = page.locator(
+        "body"
+    ).inner_text()
+
+    # ========================================================
+    # APPLICATION METHOD
+    # ========================================================
+
+    application = detect_application_method(
+        page
+    )
+
+    # ========================================================
+    # APPLICATION LINKS
+    # ========================================================
+
+    application_links = find_application_links(
+        page
+    )
+
+    # ========================================================
+    # HEADINGS
+    # ========================================================
+
+    headings = extract_headings(
+        page
+    )
+
+    # ========================================================
+    # BUTTONS
+    # ========================================================
+
+    buttons = extract_buttons(
+        page
+    )
+
+    # ========================================================
+    # APPLICATION TEXT
+    # ========================================================
+
+    application_text = extract_application_text(
+        body_text
+    )
+
+    # ========================================================
+    # PRINT RESULTS
+    # ========================================================
+
+    if verbose:
+
+        # ----------------------------------------------------
+        # APPLICATION METHOD
+        # ----------------------------------------------------
+
+        print()
+        print("APPLICATION METHOD")
+        print("-" * 60)
+
+        print(
+            f"Method: {application['method']}"
+        )
+
+        if application["email"]:
+
+            print(
+                f"Email: {application['email']}"
+            )
+
+        if application["subject"]:
+
+            print(
+                f"Subject: {application['subject']}"
+            )
+
+        if application["url"]:
+
+            print(
+                f"Application URL: {application['url']}"
+            )
+
+        # ----------------------------------------------------
+        # HEADINGS
+        # ----------------------------------------------------
+
+        print()
+        print("HEADINGS")
+        print("-" * 60)
+
+        for heading in headings:
+
+            print(
+                f"• {heading}"
+            )
+
+        # ----------------------------------------------------
+        # BUTTONS
+        # ----------------------------------------------------
+
+        print()
+        print("BUTTONS")
+        print("-" * 60)
+
+        for button in buttons:
+
+            print(
+                f"• {button}"
+            )
+
+        # ----------------------------------------------------
+        # APPLICATION LINKS
+        # ----------------------------------------------------
+
+        print()
+        print("APPLICATION-RELATED LINKS")
+        print("-" * 60)
+
+        if application_links:
+
+            for link in application_links:
+
+                print(
+                    f"• {link['text']}"
+                )
+
+                print(
+                    f"  {link['url']}"
+                )
+
+        else:
+
+            print(
+                "No obvious application links found."
+            )
+
+        # ----------------------------------------------------
+        # APPLICATION TEXT
+        # ----------------------------------------------------
+
+        print()
+        print("APPLICATION TEXT SEARCH")
+        print("-" * 60)
+
+        if application_text:
+
+            for section in application_text:
+
+                print(section)
+
+                print(
+                    "-" * 40
+                )
+
+        else:
+
+            print(
+                "No application-related text found."
+            )
+
+    # ========================================================
+    # RETURN STRUCTURED INFORMATION
     # ========================================================
 
     return {
         "url": job_url,
-        "title": page.title(),
-        "application_links": found_application_links,
+        "title": page_title,
+        "status": status,
+        "application_links": application_links,
         "application": application,
+        "headings": headings,
+        "buttons": buttons,
+        "application_text": application_text,
     }
 
 
 # ============================================================
-# OPEN MYJOBMAG
+# OPEN MYJOBMAG - TEST ONLY
 # ============================================================
 
 def open_myjobmag():
     """
-    Launch Chromium, open the MyJobMag Python jobs page,
-    collect jobs, and inspect one test job.
+    Standalone test function.
 
-    Nothing is submitted.
+    This is the ONLY function in this module that launches
+    and closes the browser.
+
+    The main automation pipeline should NOT use this function.
+
+    Instead, automation.py should do:
+
+        playwright, browser, context = launch_browser(
+            headless=False
+        )
+
+        page = context.new_page()
+
+        collect_job_links(page)
+
+        inspect_job(page, job_url)
+
+        ...
+
+        close_browser(
+            playwright,
+            browser,
+        )
     """
 
     playwright = None
@@ -755,6 +1046,10 @@ def open_myjobmag():
             "MyJobMag navigation started."
         )
 
+        # ====================================================
+        # WAIT FOR PAGE
+        # ====================================================
+
         try:
 
             page.wait_for_load_state(
@@ -773,11 +1068,19 @@ def open_myjobmag():
                 "within 15 seconds, continuing anyway."
             )
 
+        # ====================================================
+        # STATUS
+        # ====================================================
+
         if response:
 
             print(
                 f"Status: {response.status}"
             )
+
+        # ====================================================
+        # TITLE
+        # ====================================================
 
         print(
             f"Title: {page.title()}"
@@ -792,6 +1095,7 @@ def open_myjobmag():
         )
 
         print()
+
         print(
             f"Found {len(job_links)} job links."
         )
@@ -823,6 +1127,7 @@ def open_myjobmag():
         # ====================================================
 
         print()
+
         print(
             "Keeping browser open for 5 seconds..."
         )
@@ -840,6 +1145,10 @@ def open_myjobmag():
 
     finally:
 
+        # ====================================================
+        # CLOSE BROWSER
+        # ====================================================
+
         if browser and playwright:
 
             close_browser(
@@ -855,3 +1164,4 @@ def open_myjobmag():
 if __name__ == "__main__":
 
     open_myjobmag()
+
