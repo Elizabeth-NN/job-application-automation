@@ -404,6 +404,22 @@ CARD_CSS = """
     font-weight: 600;
 }
 
+/* ---------- sidebar: fully hide below a small viewport width ----------
+   Streamlit already auto-collapses the sidebar on narrow viewports by
+   sliding it off-canvas and flipping its wrapping <section> to
+   aria-expanded="false" — but depending on the Streamlit version this
+   can still leave a thin sliver or reserved spacing rather than a clean
+   disappearance. This rule only fires when the sidebar is ALREADY in
+   that collapsed state (aria-expanded="false"), so it does not fight
+   Streamlit's own toggle: tapping the arrow sets aria-expanded="true"
+   again, this rule stops applying, and the sidebar reappears as its
+   normal overlay panel. Adjust the 768px breakpoint to taste. */
+@media (max-width: 768px) {
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        display: none;
+    }
+}
+
 /* Streamlit doesn't expose a way to attach a custom class to its
    own button/column containers, so the action row below each
    card is a separate block rather than visually fused to it.
