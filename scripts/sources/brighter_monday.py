@@ -1992,39 +1992,116 @@ def extract_qualification(
         )
 
     # --------------------------------------------------------
-    # 3. Search visible page text
+    # 3. Inline job-summary block
+    #
+    # BrighterMonday usually renders qualification as part of
+    # the same inline 'Label: Value ... Label: Value' summary
+    # block used for experience level, working hours, etc.
+    # A line-based regex is unreliable here because there is
+    # often no real newline between one label's value and the
+    # next label, so we use the position-based summary-field
+    # parser instead (see extract_job_summary_fields).
     # --------------------------------------------------------
 
+    summary_fields = extract_job_summary_fields(
+        soup
+    )
+
+    for key in (
+        "min qualification",
+        "minimum qualification",
+    ):
+
+        value = summary_fields.get(
+            key,
+            "",
+        )
+
+        if value:
+            return clean_value(value)
+
+    return ""
+
+
+# ============================================================
+# JOB SUMMARY FIELD BLOCK
+#
+# BrighterMonday's "Job summary" panel renders several
+# Label: Value pairs as plain inline text, e.g.:
+#
+#   Min Qualification: Bachelors Experience Level: Mid level
+#   Experience Length: 3 years Language Requirement: English
+#   Working Hours: Full Time - 8 to 5 Applicant Location: Kenya
+#
+# There is often no distinct DOM sibling or newline separating
+# a label from its value, so extract_text_by_label() (which
+# needs a matching text NODE followed by a sibling ELEMENT)
+# cannot find these. Instead we locate every known label by
+# position in the flattened page text and slice out the text
+# between one label and the next (or the end of the string).
+# ============================================================
+
+JOB_SUMMARY_LABELS = [
+    "Min Qualification",
+    "Minimum Qualification",
+    "Experience Level",
+    "Experience Length",
+    "Language Requirement",
+    "Working Hours",
+    "Applicant Location",
+]
+
+
+def extract_job_summary_fields(
+    soup: BeautifulSoup,
+) -> Dict[str, str]:
+    """
+    Parse the inline 'Label: Value ... Label: Value' job summary
+    block into a dict keyed by lowercase label.
+    """
+
     text = soup.get_text(
-        "\n",
+        " ",
         strip=True,
     )
 
-    patterns = [
-        r"qualification\s*:\s*([^\n]+)",
-        r"qualifications\s*:\s*([^\n]+)",
-        r"minimum qualification\s*:\s*([^\n]+)",
-        r"education\s*:\s*([^\n]+)",
-    ]
+    label_pattern = "|".join(
+        re.escape(label)
+        for label in JOB_SUMMARY_LABELS
+    )
 
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
+    matches = list(
+        re.finditer(
+            rf"({label_pattern})\s*:\s*",
             text,
             flags=re.IGNORECASE,
         )
+    )
 
-        if match:
+    fields: Dict[str, str] = {}
 
-            value = clean_value(
-                match.group(1)
-            )
+    for index, match in enumerate(matches):
 
-            if value:
-                return value
+        label = clean_text(
+            match.group(1)
+        ).lower()
 
-    return ""
+        start = match.end()
+
+        end = (
+            matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(text)
+        )
+
+        value = clean_text(
+            text[start:end]
+        )
+
+        if value:
+            fields[label] = value
+
+    return fields
 
 
 # ============================================================
@@ -2066,15 +2143,39 @@ def format_experience_months(
 def extract_experience(
     soup: BeautifulSoup,
 ) -> str:
-    """Extract experience level."""
+    """
+    Extract experience level (e.g. 'Entry level', 'Mid level',
+    'Senior level').
 
-    return extract_text_by_label(
+    Tries structured HTML (dt/dd, tables, label+sibling) first,
+    then falls back to the inline job-summary block, which is
+    where BrighterMonday actually renders this on most pages.
+    """
+
+    experience = extract_text_by_label(
         soup,
         [
             "experience level",
             "experience",
         ],
     )
+
+    if experience:
+        return clean_value(experience)
+
+    summary_fields = extract_job_summary_fields(
+        soup
+    )
+
+    value = summary_fields.get(
+        "experience level",
+        "",
+    )
+
+    if value:
+        return clean_value(value)
+
+    return ""
 
 
 def extract_experience_length(
@@ -2139,6 +2240,18 @@ def extract_experience_length(
             "years experience",
             "experience required",
         ],
+    )
+
+    if value:
+        return clean_value(value)
+
+    summary_fields = extract_job_summary_fields(
+        soup
+    )
+
+    value = summary_fields.get(
+        "experience length",
+        "",
     )
 
     if value:
