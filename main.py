@@ -1,315 +1,228 @@
 """
-Job collection coordinator.
+Main entry point for the job application automation system.
 
-Collects jobs from all configured job sources,
-combines them, and removes duplicate listings.
+Workflow:
+
+    1. Collect jobs from configured sources
+    2. Match each job against the candidate profile
+    3. Score and categorize each job
+    4. Sort jobs by match score
+    5. Display the results
+
+Run with:
+
+    python main.py
 """
 
-from scripts.sources.myjobmag import (
-    collect_jobs as collect_myjobmag_jobs,
-    get_job_details as get_myjobmag_details,
-)
-
-from scripts.sources.brighter_monday import (
-    collect_jobs as collect_brightermonday_jobs,
-    get_job_details as get_brightermonday_details,
-)
+from scripts.job_collector import collect_all_jobs
+from scripts.job_matcher import calculate_match
 
 
 # ============================================================
-# MYJOBMAG
+# DISPLAY HELPERS
 # ============================================================
 
-MYJOBMAG_URLS = [
-    (
-        "https://www.myjobmag.co.ke/"
-        "jobs-by-title/developer-python"
-    ),
-]
+def print_separator(char="=", length=70):
+    """Print a visual separator."""
+    print(char * length)
 
 
-# ============================================================
-# BRIGHTERMONDAY
-# ============================================================
-
-BRIGHTERMONDAY_URLS = [
-    "https://www.brightermonday.co.ke/jobs"
-]
-
-
-# ============================================================
-# COLLECT MYJOBMAG
-# ============================================================
-
-def collect_myjobmag():
+def print_job_result(index, job):
     """
-    Collect and fully extract jobs from MyJobMag.
+    Display one matched job in a readable format.
     """
 
-    jobs = []
-
-    for listing_url in MYJOBMAG_URLS:
-
-        try:
-
-            listings = collect_myjobmag_jobs(
-                listing_url
-            )
-
-        except Exception as error:
-
-            print(
-                f"   ⚠ Failed to collect "
-                f"MyJobMag listings: {error}"
-            )
-
-            continue
-
-        for listing in listings:
-
-            try:
-
-                details = get_myjobmag_details(
-                    listing["url"]
-                )
-
-                details["source"] = "MyJobMag"
-
-                jobs.append(
-                    details
-                )
-
-            except Exception as error:
-
-                print(
-                    f"   ⚠ Failed to fetch "
-                    f"{listing['url']}: {error}"
-                )
-
-    return jobs
-
-
-# ============================================================
-# COLLECT BRIGHTERMONDAY
-# ============================================================
-
-def collect_brightermonday():
-    """
-    Collect and fully extract jobs from BrighterMonday.
-
-    BrighterMonday's collector may already have fetched
-    complete job details for some listings. When those
-    details are available, reuse them instead of making
-    another HTTP request.
-    """
-
-    jobs = []
-
-    for listing_url in BRIGHTERMONDAY_URLS:
-
-        try:
-
-            listings = collect_brightermonday_jobs(
-                listing_url
-            )
-
-        except Exception as error:
-
-            print(
-                f"   ⚠ Failed to collect "
-                f"BrighterMonday listings: {error}"
-            )
-
-            continue
-
-        for listing in listings:
-
-            try:
-
-                # ------------------------------------------------
-                # Reuse details if the BrighterMonday collector
-                # already downloaded the job page.
-                # ------------------------------------------------
-
-                details = listing.get(
-                    "details"
-                )
-
-                if details:
-
-                    details["source"] = "BrighterMonday"
-
-                    jobs.append(
-                        details
-                    )
-
-                    continue
-
-                # ------------------------------------------------
-                # Otherwise fetch the job details normally.
-                # ------------------------------------------------
-
-                details = get_brightermonday_details(
-                    listing["url"]
-                )
-
-                details["source"] = "BrighterMonday"
-
-                jobs.append(
-                    details
-                )
-
-            except Exception as error:
-
-                print(
-                    f"   ⚠ Failed to fetch "
-                    f"{listing['url']}: {error}"
-                )
-
-    return jobs
-
-
-# ============================================================
-# REMOVE DUPLICATES
-# ============================================================
-
-def remove_duplicate_jobs(jobs):
-    """
-    Remove duplicate jobs based primarily on URL.
-
-    A URL uniquely identifies a listing on the source.
-    """
-
-    unique_jobs = []
-
-    seen_urls = set()
-
-    for job in jobs:
-
-        url = job.get(
-            "url",
-            ""
-        ).strip()
-
-        # Ignore jobs without a URL.
-        if not url:
-            continue
-
-        # Skip duplicate listings.
-        if url in seen_urls:
-            continue
-
-        seen_urls.add(
-            url
-        )
-
-        unique_jobs.append(
-            job
-        )
-
-    return unique_jobs
-
-
-# ============================================================
-# COLLECT ALL SOURCES
-# ============================================================
-
-def collect_all_jobs():
-    """
-    Collect jobs from all configured sources,
-    combine them, and remove duplicates.
-    """
-
-    all_jobs = []
-
-    # ========================================================
-    # MYJOBMAG
-    # ========================================================
+    print_separator("-", 70)
 
     print(
-        "Collecting from MyJobMag..."
+        f"{index}. {job.get('title', 'Unknown title')}"
     )
-
-    myjobmag_jobs = collect_myjobmag()
 
     print(
-        f"   Found {len(myjobmag_jobs)} jobs"
+        f"   Company:       {job.get('company', 'Unknown')}"
     )
 
-    all_jobs.extend(
-        myjobmag_jobs
+    print(
+        f"   Location:      {job.get('location', 'Unknown')}"
     )
 
-    # ========================================================
-    # BRIGHTERMONDAY
-    # ========================================================
+    print(
+        f"   Source:        {job.get('source', 'Unknown')}"
+    )
+
+    print(
+        f"   Score:         {job.get('score', 0)}%"
+    )
+
+    print(
+        f"   Category:      {job.get('category', 'Unknown')}"
+    )
+
+    print(
+        f"   Recommendation:"
+        f" {job.get('recommendation', 'Unknown')}"
+    )
 
     print()
 
     print(
-        "Collecting from BrighterMonday..."
+        f"   Role Score:       "
+        f"{job.get('role_score', 0)}/30"
     )
-
-    brightermonday_jobs = collect_brightermonday()
 
     print(
-        f"   Found {len(brightermonday_jobs)} jobs"
+        f"   Skill Score:      "
+        f"{job.get('skill_score', 0)}/35"
     )
 
-    all_jobs.extend(
-        brightermonday_jobs
+    print(
+        f"   Experience Score: "
+        f"{job.get('experience_score', 0)}/15"
     )
 
-    # ========================================================
-    # REMOVE DUPLICATES
-    # ========================================================
-
-    unique_jobs = remove_duplicate_jobs(
-        all_jobs
+    print(
+        f"   Location Score:   "
+        f"{job.get('location_score', 0)}/10"
     )
 
-    # ========================================================
-    # REPORT DUPLICATES
-    # ========================================================
-
-    duplicate_count = (
-        len(all_jobs)
-        - len(unique_jobs)
+    print(
+        f"   Education Score:  "
+        f"{job.get('education_score', 0)}/5"
     )
 
-    if duplicate_count > 0:
+    print(
+        f"   Technology Score: "
+        f"{job.get('technology_score', 0)}/5"
+    )
+
+    print()
+
+    role_matches = job.get(
+        "role_matches",
+        []
+    )
+
+    if role_matches:
 
         print(
-            f"   Removed {duplicate_count} "
-            f"duplicate jobs"
+            "   Matching Roles: "
+            + ", ".join(role_matches)
         )
 
-    return unique_jobs
-
-
-# ============================================================
-# TEST / COMMAND-LINE ENTRY POINT
-# ============================================================
-
-if __name__ == "__main__":
-
-    print("=" * 60)
-    print("JOB COLLECTION TEST")
-    print("=" * 60)
-    print()
-
-    jobs = collect_all_jobs()
-
-    print()
-
-    print("=" * 60)
-
-    print(
-        f"TOTAL JOBS: {len(jobs)}"
+    matching_skills = job.get(
+        "matching_skills",
+        []
     )
 
-    print("=" * 60)
+    if matching_skills:
 
+        print(
+            "   Matching Skills: "
+            + ", ".join(matching_skills)
+        )
+
+    transferable_skills = job.get(
+        "transferable_skills",
+        []
+    )
+
+    if transferable_skills:
+
+        print(
+            "   Transferable Skills: "
+            + ", ".join(transferable_skills)
+        )
+
+    missing_skills = job.get(
+        "missing_skills",
+        []
+    )
+
+    if missing_skills:
+
+        print(
+            "   Missing Skills: "
+            + ", ".join(missing_skills)
+        )
+
+    outside_technologies = job.get(
+        "outside_technologies",
+        []
+    )
+
+    if outside_technologies:
+
+        print(
+            "   Outside Technologies: "
+            + ", ".join(outside_technologies)
+        )
+
+    experience_level = job.get(
+        "experience_level",
+        "unknown"
+    )
+
+    years_required = job.get(
+        "years_required"
+    )
+
+    print(
+        f"   Experience:      {experience_level}"
+    )
+
+    if years_required is not None:
+
+        print(
+            f"   Years Required:   "
+            f"{years_required}"
+        )
+
+    warnings = job.get(
+        "warnings",
+        []
+    )
+
+    if warnings:
+
+        print()
+
+        print("   Warnings:")
+
+        for warning in warnings:
+
+            print(
+                f"      ⚠ {warning}"
+            )
+
+    print()
+
+    print(
+        f"   URL: {job.get('url', '')}"
+    )
+
+
+# ============================================================
+# MATCH JOBS
+# ============================================================
+
+def match_jobs(jobs):
+    """
+    Run the job matcher against every collected job.
+
+    Returns:
+        list: Jobs containing match information.
+    """
+
+    matched_jobs = []
+
+    print()
+    print_separator()
+
+    print(
+        "MATCHING JOBS AGAINST CANDIDATE PROFILE"
+    )
+
+    print_separator()
     print()
 
     for index, job in enumerate(
@@ -317,10 +230,279 @@ if __name__ == "__main__":
         start=1
     ):
 
-        print(
-            f"{index}. "
-            f"{job.get('title', '')} "
-            f"at "
-            f"{job.get('company', '')} "
-            f"[{job.get('source', '')}]"
+        title = job.get(
+            "title",
+            ""
         )
+
+        description = job.get(
+            "description",
+            ""
+        )
+
+        print(
+            f"   Matching {index}/{len(jobs)}: "
+            f"{title}"
+        )
+
+        try:
+
+            result = calculate_match(
+                title,
+                description
+            )
+
+            # ------------------------------------------------
+            # Add matching information to the job itself.
+            # ------------------------------------------------
+
+            job.update(
+                result
+            )
+
+            matched_jobs.append(
+                job
+            )
+
+            print(
+                f"      ↳ "
+                f"{result['score']}% "
+                f"| "
+                f"{result['recommendation']}"
+            )
+
+        except Exception as error:
+
+            print(
+                f"      ⚠ Matching failed: {error}"
+            )
+
+    return matched_jobs
+
+
+# ============================================================
+# SORT JOBS
+# ============================================================
+
+def sort_jobs(jobs):
+    """
+    Sort jobs from highest match score to lowest.
+    """
+
+    return sorted(
+        jobs,
+        key=lambda job: job.get(
+            "score",
+            0
+        ),
+        reverse=True
+    )
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+def print_summary(jobs):
+    """
+    Print a summary of the matching results.
+    """
+
+    total = len(jobs)
+
+    apply_jobs = [
+        job
+        for job in jobs
+        if job.get("recommendation") == "APPLY"
+    ]
+
+    review_jobs = [
+        job
+        for job in jobs
+        if job.get("recommendation") == "REVIEW"
+    ]
+
+    skip_jobs = [
+        job
+        for job in jobs
+        if job.get("recommendation") == "SKIP"
+    ]
+
+    strong_matches = [
+        job
+        for job in jobs
+        if job.get("category") == "STRONG MATCH"
+    ]
+
+    good_matches = [
+        job
+        for job in jobs
+        if job.get("category") == "GOOD MATCH"
+    ]
+
+    print()
+    print_separator()
+
+    print("MATCHING SUMMARY")
+
+    print_separator()
+
+    print()
+
+    print(
+        f"Total jobs:       {total}"
+    )
+
+    print(
+        f"Strong matches:   {len(strong_matches)}"
+    )
+
+    print(
+        f"Good matches:     {len(good_matches)}"
+    )
+
+    print(
+        f"Apply:            {len(apply_jobs)}"
+    )
+
+    print(
+        f"Review:           {len(review_jobs)}"
+    )
+
+    print(
+        f"Skip:             {len(skip_jobs)}"
+    )
+
+
+# ============================================================
+# MAIN WORKFLOW
+# ============================================================
+
+def run():
+    """
+    Run the complete job-search workflow.
+    """
+
+    print_separator()
+
+    print(
+        "AUTOMATED JOB SEARCH"
+    )
+
+    print_separator()
+
+    print()
+
+    # ========================================================
+    # 1. COLLECT JOBS
+    # ========================================================
+
+    print(
+        "STEP 1: COLLECTING JOBS"
+    )
+
+    print_separator("-")
+
+    jobs = collect_all_jobs()
+
+    print()
+
+    print(
+        f"Collected {len(jobs)} unique jobs."
+    )
+
+    # --------------------------------------------------------
+    # Stop if nothing was collected.
+    # --------------------------------------------------------
+
+    if not jobs:
+
+        print()
+
+        print(
+            "No jobs were collected."
+        )
+
+        return
+
+    # ========================================================
+    # 2. MATCH JOBS
+    # ========================================================
+
+    print()
+
+    print(
+        "STEP 2: MATCHING JOBS"
+    )
+
+    matched_jobs = match_jobs(
+        jobs
+    )
+
+    # ========================================================
+    # 3. SORT
+    # ========================================================
+
+    print()
+
+    print(
+        "STEP 3: SORTING JOBS BY MATCH SCORE"
+    )
+
+    matched_jobs = sort_jobs(
+        matched_jobs
+    )
+
+    # ========================================================
+    # 4. SUMMARY
+    # ========================================================
+
+    print_summary(
+        matched_jobs
+    )
+
+    # ========================================================
+    # 5. DISPLAY RESULTS
+    # ========================================================
+
+    print()
+
+    print_separator()
+
+    print(
+        "JOB MATCH RESULTS"
+    )
+
+    print_separator()
+
+    for index, job in enumerate(
+        matched_jobs,
+        start=1
+    ):
+
+        print_job_result(
+            index,
+            job
+        )
+
+    # ========================================================
+    # COMPLETE
+    # ========================================================
+
+    print()
+    print_separator()
+
+    print(
+        "JOB SEARCH COMPLETE"
+    )
+
+    print_separator()
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+
+    run()
