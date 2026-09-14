@@ -1,4 +1,3 @@
-
 """
 Main job-search automation pipeline.
 
@@ -26,7 +25,7 @@ from scripts.browser.browser import (
 from scripts.browser.myjobmag import (
     MYJOBMAG_URL,
     collect_job_links,
-    detect_application_method,
+    inspect_job,
 )
 
 from scripts.job_matcher import calculate_match
@@ -37,16 +36,9 @@ from scripts.job_tracker import save_job
 # SETTINGS
 # ============================================================
 
-MAX_JOBS = None
-
-# Set to a number while testing.
-# Example:
-#
-# MAX_JOBS = 3
-#
-# Once everything works:
-#
-# MAX_JOBS = None
+# Use a small number while testing.
+# Change to None when everything works.
+MAX_JOBS = 3
 
 
 # ============================================================
@@ -59,18 +51,27 @@ def get_page_text(page):
     """
 
     try:
-        return page.locator("body").inner_text()
+
+        return page.locator(
+            "body"
+        ).inner_text()
 
     except Exception:
+
         return ""
 
 
-def get_job_title(page, fallback_title=""):
+def get_job_title(
+    page,
+    fallback_title=""
+):
     """
     Try to obtain the actual job title from the job page.
     """
 
-    headings = page.locator("h1, h2").all()
+    headings = page.locator(
+        "h1, h2"
+    ).all()
 
     for heading in headings:
 
@@ -214,7 +215,10 @@ def build_tracker_record(
 # PROCESS ONE JOB
 # ============================================================
 
-def process_job(page, job):
+def process_job(
+    page,
+    job,
+):
     """
     Open and process one job.
 
@@ -237,65 +241,26 @@ def process_job(page, job):
     try:
 
         # ----------------------------------------------------
-        # Open job
+        # Inspect job
         # ----------------------------------------------------
 
-        response = page.goto(
-            job["url"],
-            wait_until="commit",
-            timeout=30000,
-        )
-
-        print(
-            "Job navigation started."
-        )
-
-        try:
-
-            page.wait_for_load_state(
-                "domcontentloaded",
-                timeout=15000,
-            )
-
-            print(
-                "Job page loaded."
-            )
-
-        except Exception:
-
-            print(
-                "Page did not reach "
-                "domcontentloaded. "
-                "Continuing."
-            )
-
-        if response:
-
-            print(
-                f"Status: {response.status}"
-            )
-
-        # ----------------------------------------------------
-        # Get actual page content
-        # ----------------------------------------------------
-
-        page_text = get_page_text(
-            page
-        )
-
-        actual_title = get_job_title(
+        inspection = inspect_job(
             page,
-            job.get("title", "")
+            job["url"],
         )
 
         # ----------------------------------------------------
-        # Application method
+        # Get application information
         # ----------------------------------------------------
 
-        application = (
-            detect_application_method(
-                page
-            )
+        application = inspection.get(
+            "application",
+            {
+                "method": "unknown",
+                "email": None,
+                "subject": None,
+                "url": None,
+            },
         )
 
         print()
@@ -303,7 +268,7 @@ def process_job(page, job):
             "Application method:",
             application.get(
                 "method",
-                "unknown"
+                "unknown",
             )
         )
 
@@ -327,6 +292,19 @@ def process_job(page, job):
                 "Application URL:",
                 application["url"]
             )
+
+        # ----------------------------------------------------
+        # Get actual page content
+        # ----------------------------------------------------
+
+        page_text = get_page_text(
+            page
+        )
+
+        actual_title = get_job_title(
+            page,
+            job.get("title", "")
+        )
 
         # ----------------------------------------------------
         # Match job
@@ -402,7 +380,7 @@ def process_job(page, job):
 
         save_job(
             tracker_record,
-            match_result
+            match_result,
         )
 
         print()
@@ -445,6 +423,7 @@ def run_automation():
     print("=" * 70)
 
     print()
+
     print(
         "Pipeline:"
     )
@@ -454,6 +433,7 @@ def run_automation():
     )
 
     print()
+
     print(
         "Automatic application submission: DISABLED"
     )
@@ -559,6 +539,7 @@ def run_automation():
 
             jobs = jobs[:MAX_JOBS]
 
+            print()
             print(
                 f"Testing with first "
                 f"{len(jobs)} jobs."
@@ -609,6 +590,7 @@ def run_automation():
         for result in results:
 
             if not result["success"]:
+
                 continue
 
             recommendation = (
@@ -635,6 +617,7 @@ def run_automation():
         print("=" * 70)
 
         print()
+
         print(
             f"Jobs processed: {len(results)}"
         )
@@ -648,6 +631,7 @@ def run_automation():
         )
 
         print()
+
         print(
             f"APPLY: {apply_count}"
         )
@@ -661,6 +645,7 @@ def run_automation():
         )
 
         print()
+
         print(
             "Results saved to the job tracker."
         )
@@ -697,4 +682,3 @@ def run_automation():
 if __name__ == "__main__":
 
     run_automation()
-
