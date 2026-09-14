@@ -1,3 +1,4 @@
+
 """
 Main job-search automation pipeline.
 
@@ -15,7 +16,12 @@ Pipeline:
 
 This module does NOT submit applications.
 It does NOT modify the Streamlit interface.
+
+Browser lifecycle is managed here.
+The MyJobMag browser module only provides reusable functions.
 """
+
+from datetime import datetime
 
 from scripts.browser.browser import (
     launch_browser,
@@ -37,7 +43,9 @@ from scripts.job_tracker import save_job
 # ============================================================
 
 # Use a small number while testing.
-# Change to None when everything works.
+#
+# Change to None when the pipeline is working correctly
+# and you want to process every collected job.
 MAX_JOBS = 3
 
 
@@ -51,43 +59,92 @@ def get_page_text(page):
     """
 
     try:
-
-        return page.locator(
-            "body"
-        ).inner_text()
+        return page.locator("body").inner_text()
 
     except Exception:
-
         return ""
 
 
-def get_job_title(
-    page,
-    fallback_title=""
-):
+def get_job_title(page, fallback_title=""):
     """
     Try to obtain the actual job title from the job page.
+
+    Falls back to the title collected from the listing page
+    if no heading can be found.
     """
 
-    headings = page.locator(
-        "h1, h2"
-    ).all()
+    try:
+        headings = page.locator("h1, h2").all()
+
+    except Exception:
+        return fallback_title
 
     for heading in headings:
 
         try:
-
             text = heading.inner_text().strip()
 
             if text:
-
                 return text
 
         except Exception:
-
             continue
 
     return fallback_title
+
+
+def build_application_notes(application):
+    """
+    Convert application information into text that can be
+    stored in the existing Notes tracker field.
+
+    The tracker schema does not have separate columns for
+    application method, email, subject, or application URL.
+    """
+
+    if not application:
+        return ""
+
+    notes = []
+
+    method = application.get(
+        "method",
+        "unknown",
+    )
+
+    if method:
+        notes.append(
+            f"Application Method: {method}"
+        )
+
+    email = application.get(
+        "email"
+    )
+
+    if email:
+        notes.append(
+            f"Application Email: {email}"
+        )
+
+    subject = application.get(
+        "subject"
+    )
+
+    if subject:
+        notes.append(
+            f"Application Subject: {subject}"
+        )
+
+    application_url = application.get(
+        "url"
+    )
+
+    if application_url:
+        notes.append(
+            f"Application URL: {application_url}"
+        )
+
+    return " | ".join(notes)
 
 
 def build_tracker_record(
@@ -97,109 +154,125 @@ def build_tracker_record(
 ):
     """
     Combine job information, matcher results and
-    application information into one tracker record.
+    application information into the EXISTING tracker schema.
+
+    Existing tracker columns:
+
+        Date Found
+        Job Title
+        Company
+        Location
+        Score
+        Category
+        Recommendation
+        Role Match
+        Matching Skills
+        Missing Skills
+        Warnings
+        Posted
+        Deadline
+        URL
+        Application Status
+        CV Version
+        Cover Letter
+        Notes
     """
 
-    return {
+    # --------------------------------------------------------
+    # Date found
+    # --------------------------------------------------------
 
-        # ----------------------------------------------------
-        # Job information
-        # ----------------------------------------------------
+    date_found = datetime.now().strftime(
+        "%Y-%m-%d"
+    )
+
+    # --------------------------------------------------------
+    # Application information
+    # --------------------------------------------------------
+
+    application_notes = build_application_notes(
+        application
+    )
+
+    # --------------------------------------------------------
+    # Existing tracker schema
+    # --------------------------------------------------------
+
+    return {
+        "Date Found": date_found,
 
         "Job Title": job.get(
             "title",
-            ""
+            "",
         ),
 
         "Company": job.get(
             "company",
-            ""
+            "",
         ),
 
         "Location": job.get(
             "location",
-            ""
+            "",
         ),
-
-        "URL": job.get(
-            "url",
-            ""
-        ),
-
-        # ----------------------------------------------------
-        # Matcher information
-        # ----------------------------------------------------
 
         "Score": match_result.get(
             "score",
-            0
+            0,
         ),
 
         "Category": match_result.get(
             "category",
-            ""
+            "",
         ),
 
         "Recommendation": match_result.get(
             "recommendation",
-            ""
+            "",
         ),
 
         "Role Match": ", ".join(
             match_result.get(
                 "role_matches",
-                []
+                [],
             )
         ),
 
         "Matching Skills": ", ".join(
             match_result.get(
                 "matching_skills",
-                []
+                [],
             )
         ),
 
         "Missing Skills": ", ".join(
             match_result.get(
                 "missing_skills",
-                []
+                [],
             )
         ),
 
         "Warnings": " | ".join(
             match_result.get(
                 "warnings",
-                []
+                [],
             )
         ),
 
-        # ----------------------------------------------------
-        # Application information
-        # ----------------------------------------------------
-
-        "Application Method": application.get(
-            "method",
-            "unknown"
+        "Posted": job.get(
+            "posted",
+            "",
         ),
 
-        "Application Email": application.get(
-            "email",
-            ""
+        "Deadline": job.get(
+            "deadline",
+            "",
         ),
 
-        "Application Subject": application.get(
-            "subject",
-            ""
-        ),
-
-        "Application URL": application.get(
+        "URL": job.get(
             "url",
-            ""
+            "",
         ),
-
-        # ----------------------------------------------------
-        # Initial status
-        # ----------------------------------------------------
 
         "Application Status": "Not Applied",
 
@@ -207,7 +280,7 @@ def build_tracker_record(
 
         "Cover Letter": "",
 
-        "Notes": "",
+        "Notes": application_notes,
     }
 
 
@@ -215,14 +288,20 @@ def build_tracker_record(
 # PROCESS ONE JOB
 # ============================================================
 
-def process_job(
-    page,
-    job,
-):
+def process_job(page, job):
     """
     Open and process one job.
 
-    Nothing is submitted.
+    Steps:
+
+        1. Inspect the job
+        2. Detect application method
+        3. Extract page text
+        4. Match the job
+        5. Build tracker record
+        6. Save the job
+
+    Nothing is submitted automatically.
     """
 
     print()
@@ -240,18 +319,23 @@ def process_job(
 
     try:
 
-        # ----------------------------------------------------
-        # Inspect job
-        # ----------------------------------------------------
+        # ====================================================
+        # 1. INSPECT JOB
+        # ====================================================
 
         inspection = inspect_job(
             page,
             job["url"],
         )
 
-        # ----------------------------------------------------
-        # Get application information
-        # ----------------------------------------------------
+        if not inspection:
+            raise RuntimeError(
+                "Job inspection returned no data."
+            )
+
+        # ====================================================
+        # 2. APPLICATION INFORMATION
+        # ====================================================
 
         application = inspection.get(
             "application",
@@ -269,46 +353,53 @@ def process_job(
             application.get(
                 "method",
                 "unknown",
-            )
+            ),
         )
 
         if application.get("email"):
-
             print(
                 "Application email:",
-                application["email"]
+                application["email"],
             )
 
         if application.get("subject"):
-
             print(
                 "Application subject:",
-                application["subject"]
+                application["subject"],
             )
 
         if application.get("url"):
-
             print(
                 "Application URL:",
-                application["url"]
+                application["url"],
             )
 
-        # ----------------------------------------------------
-        # Get actual page content
-        # ----------------------------------------------------
+        # ====================================================
+        # 3. GET PAGE CONTENT
+        # ====================================================
 
         page_text = get_page_text(
             page
         )
 
+        if not page_text:
+            print(
+                "Warning: Could not extract page text."
+            )
+
         actual_title = get_job_title(
             page,
-            job.get("title", "")
+            job.get("title", ""),
         )
 
-        # ----------------------------------------------------
-        # Match job
-        # ----------------------------------------------------
+        print()
+        print(
+            f"Actual title: {actual_title}"
+        )
+
+        # ====================================================
+        # 4. MATCH JOB
+        # ====================================================
 
         match_result = calculate_match(
             actual_title,
@@ -318,17 +409,17 @@ def process_job(
         print()
         print(
             f"Match score: "
-            f"{match_result['score']}%"
+            f"{match_result.get('score', 0)}%"
         )
 
         print(
             f"Category: "
-            f"{match_result['category']}"
+            f"{match_result.get('category', '')}"
         )
 
         print(
             f"Recommendation: "
-            f"{match_result['recommendation']}"
+            f"{match_result.get('recommendation', '')}"
         )
 
         print()
@@ -337,10 +428,10 @@ def process_job(
             ", ".join(
                 match_result.get(
                     "matching_skills",
-                    []
+                    [],
                 )
             )
-            or "None"
+            or "None",
         )
 
         print(
@@ -348,35 +439,43 @@ def process_job(
             ", ".join(
                 match_result.get(
                     "missing_skills",
-                    []
+                    [],
                 )
             )
-            or "None"
+            or "None",
         )
 
-        # ----------------------------------------------------
-        # Build tracker record
-        # ----------------------------------------------------
+        warnings = match_result.get(
+            "warnings",
+            [],
+        )
+
+        if warnings:
+            print(
+                "Warnings:",
+                " | ".join(warnings),
+            )
+
+        # ====================================================
+        # 5. BUILD TRACKER RECORD
+        # ====================================================
 
         job_for_tracker = dict(
             job
         )
 
-        job_for_tracker["title"] = (
-            actual_title
+        # Use the actual title from the job page.
+        job_for_tracker["title"] = actual_title
+
+        tracker_record = build_tracker_record(
+            job_for_tracker,
+            match_result,
+            application,
         )
 
-        tracker_record = (
-            build_tracker_record(
-                job_for_tracker,
-                match_result,
-                application,
-            )
-        )
-
-        # ----------------------------------------------------
-        # Save
-        # ----------------------------------------------------
+        # ====================================================
+        # 6. SAVE JOB
+        # ====================================================
 
         save_job(
             tracker_record,
@@ -390,9 +489,10 @@ def process_job(
 
         return {
             "success": True,
-            "job": job,
+            "job": job_for_tracker,
             "match": match_result,
             "application": application,
+            "tracker_record": tracker_record,
         }
 
     except Exception as error:
@@ -410,12 +510,121 @@ def process_job(
 
 
 # ============================================================
+# AUTOMATION SUMMARY
+# ============================================================
+
+def print_summary(results):
+    """
+    Print a summary of the automation run.
+    """
+
+    successful = sum(
+        1
+        for result in results
+        if result.get("success")
+    )
+
+    failed = (
+        len(results)
+        - successful
+    )
+
+    apply_count = 0
+    review_count = 0
+    skip_count = 0
+
+    for result in results:
+
+        if not result.get("success"):
+            continue
+
+        recommendation = (
+            result.get(
+                "match",
+                {},
+            ).get(
+                "recommendation"
+            )
+        )
+
+        if recommendation == "APPLY":
+            apply_count += 1
+
+        elif recommendation == "REVIEW":
+            review_count += 1
+
+        elif recommendation == "SKIP":
+            skip_count += 1
+
+    print()
+    print("=" * 70)
+    print("AUTOMATION COMPLETE")
+    print("=" * 70)
+
+    print()
+
+    print(
+        f"Jobs processed: {len(results)}"
+    )
+
+    print(
+        f"Successful: {successful}"
+    )
+
+    print(
+        f"Failed: {failed}"
+    )
+
+    print()
+
+    print(
+        f"APPLY: {apply_count}"
+    )
+
+    print(
+        f"REVIEW: {review_count}"
+    )
+
+    print(
+        f"SKIP: {skip_count}"
+    )
+
+    print()
+
+    print(
+        "Automatic application submission: DISABLED"
+    )
+
+    print(
+        "Results saved to the job tracker."
+    )
+
+
+# ============================================================
 # MAIN AUTOMATION
 # ============================================================
 
 def run_automation():
     """
     Run the complete MyJobMag automation pipeline.
+
+    Browser lifecycle:
+
+        launch_browser()
+            ↓
+        create page
+            ↓
+        collect jobs
+            ↓
+        inspect jobs
+            ↓
+        match jobs
+            ↓
+        save jobs
+            ↓
+        close_browser()
+
+    No applications are submitted.
     """
 
     print("=" * 70)
@@ -424,10 +633,7 @@ def run_automation():
 
     print()
 
-    print(
-        "Pipeline:"
-    )
-
+    print("Pipeline:")
     print(
         "Collect → Inspect → Match → Track"
     )
@@ -449,6 +655,11 @@ def run_automation():
         # 1. START BROWSER
         # ====================================================
 
+        print()
+        print(
+            "Starting browser..."
+        )
+
         playwright, browser, context = (
             launch_browser(
                 headless=False
@@ -458,7 +669,7 @@ def run_automation():
         page = context.new_page()
 
         # ====================================================
-        # 2. OPEN JOB LISTING
+        # 2. OPEN LISTING PAGE
         # ====================================================
 
         print()
@@ -529,11 +740,11 @@ def run_automation():
                 "No jobs found."
             )
 
-            return
+            return results
 
-        # ----------------------------------------------------
-        # Limit jobs during testing
-        # ----------------------------------------------------
+        # ====================================================
+        # 4. LIMIT JOBS DURING TESTING
+        # ====================================================
 
         if MAX_JOBS is not None:
 
@@ -546,7 +757,7 @@ def run_automation():
             )
 
         # ====================================================
-        # 4. PROCESS JOBS
+        # 5. PROCESS JOBS
         # ====================================================
 
         for index, job in enumerate(
@@ -569,105 +780,49 @@ def run_automation():
             )
 
         # ====================================================
-        # 5. SUMMARY
+        # 6. PRINT SUMMARY
         # ====================================================
 
-        successful = sum(
-            1
-            for result in results
-            if result["success"]
+        print_summary(
+            results
         )
 
-        failed = (
-            len(results)
-            - successful
-        )
+        return results
 
-        apply_count = 0
-        review_count = 0
-        skip_count = 0
-
-        for result in results:
-
-            if not result["success"]:
-
-                continue
-
-            recommendation = (
-                result["match"].get(
-                    "recommendation"
-                )
-            )
-
-            if recommendation == "APPLY":
-
-                apply_count += 1
-
-            elif recommendation == "REVIEW":
-
-                review_count += 1
-
-            elif recommendation == "SKIP":
-
-                skip_count += 1
+    except KeyboardInterrupt:
 
         print()
-        print("=" * 70)
-        print("AUTOMATION COMPLETE")
-        print("=" * 70)
-
-        print()
-
         print(
-            f"Jobs processed: {len(results)}"
+            "Automation interrupted by user."
         )
 
-        print(
-            f"Successful: {successful}"
-        )
-
-        print(
-            f"Failed: {failed}"
-        )
-
-        print()
-
-        print(
-            f"APPLY: {apply_count}"
-        )
-
-        print(
-            f"REVIEW: {review_count}"
-        )
-
-        print(
-            f"SKIP: {skip_count}"
-        )
-
-        print()
-
-        print(
-            "Results saved to the job tracker."
-        )
+        return results
 
     except Exception as error:
 
         print()
-        print(
-            "=" * 70
-        )
+        print("=" * 70)
 
         print(
             f"AUTOMATION ERROR: {error}"
         )
 
-        print(
-            "=" * 70
-        )
+        print("=" * 70)
+
+        return results
 
     finally:
 
+        # ====================================================
+        # 7. CLOSE BROWSER
+        # ====================================================
+
         if browser and playwright:
+
+            print()
+            print(
+                "Closing browser..."
+            )
 
             close_browser(
                 playwright,
