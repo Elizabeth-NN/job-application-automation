@@ -3,9 +3,12 @@ MyJobMag browser automation.
 
 Uses Playwright to inspect MyJobMag job listings and
 determine how applications are handled.
+
+This module does NOT submit applications.
 """
 
 import re
+from urllib.parse import urljoin
 
 from scripts.browser.browser import (
     launch_browser,
@@ -17,14 +20,14 @@ from scripts.browser.browser import (
 # URLS
 # ============================================================
 
+BASE_URL = "https://www.myjobmag.co.ke"
+
 MYJOBMAG_URL = (
-    "https://www.myjobmag.co.ke/"
-    "jobs-by-title/developer-python"
+    f"{BASE_URL}/jobs-by-title/developer-python"
 )
 
 TEST_JOB_URL = (
-    "https://www.myjobmag.co.ke/"
-    "job/fullstack-developer-itravel-holidays"
+    f"{BASE_URL}/job/fullstack-developer-itravel-holidays"
 )
 
 
@@ -35,6 +38,9 @@ TEST_JOB_URL = (
 def collect_job_links(page):
     """
     Find job listing links on the current MyJobMag page.
+
+    Returns:
+        list[dict]: Job title and URL.
     """
 
     job_links = []
@@ -44,7 +50,6 @@ def collect_job_links(page):
     for link in links:
 
         try:
-
             href = link.get_attribute("href")
             title = link.inner_text().strip()
 
@@ -54,24 +59,25 @@ def collect_job_links(page):
             if "/job/" not in href:
                 continue
 
-            # Convert relative URL to absolute URL.
-            if href.startswith("/"):
-                href = (
-                    "https://www.myjobmag.co.ke"
-                    + href
-                )
+            job_url = urljoin(
+                BASE_URL,
+                href,
+            )
 
             job_links.append(
                 {
                     "title": title,
-                    "url": href,
+                    "url": job_url,
                 }
             )
 
         except Exception:
             continue
 
-    # Remove duplicate URLs.
+    # --------------------------------------------------------
+    # Remove duplicate URLs
+    # --------------------------------------------------------
+
     unique_jobs = []
     seen_urls = set()
 
@@ -81,6 +87,7 @@ def collect_job_links(page):
             continue
 
         seen_urls.add(job["url"])
+
         unique_jobs.append(job)
 
     return unique_jobs
@@ -98,16 +105,21 @@ def extract_application_subject(
     Try to determine the email subject requested
     by the employer.
 
-    If no explicit subject is found, use the job title
-    as a fallback.
+    If no explicit subject is found, use the
+    main job heading as a fallback.
     """
 
     lines = body_text.splitlines()
 
+    # --------------------------------------------------------
+    # Explicit subject patterns
+    # --------------------------------------------------------
+
     subject_patterns = [
         r"subject\s*:\s*(.+)",
-        r"position\s+as\s+subject",
-        r"email\s+subject",
+        r"email\s+subject\s*:\s*(.+)",
+        r"use\s+the\s+position\s+as\s+subject",
+        r"using\s+the\s+position\s+as\s+subject",
     ]
 
     for line in lines:
@@ -132,7 +144,29 @@ def extract_application_subject(
                 if subject:
                     return subject
 
-    # Try the main job heading.
+    # --------------------------------------------------------
+    # Check nearby lines for "subject"
+    # --------------------------------------------------------
+
+    for index, line in enumerate(lines):
+
+        normalized = line.strip().lower()
+
+        if "subject" not in normalized:
+            continue
+
+        # If the next line contains the subject.
+        if index + 1 < len(lines):
+
+            next_line = lines[index + 1].strip()
+
+            if next_line:
+                return next_line
+
+    # --------------------------------------------------------
+    # Fall back to job heading
+    # --------------------------------------------------------
+
     headings = page.locator(
         "h1, h2"
     ).all()
@@ -144,7 +178,20 @@ def extract_application_subject(
             text = heading.inner_text().strip()
 
             if text:
-                return text
+
+                # Prefer the actual job title rather than
+                # generic headings.
+                if not any(
+                    phrase in text.lower()
+                    for phrase in [
+                        "send this job",
+                        "did you notice",
+                        "related companies",
+                        "career advice",
+                    ]
+                ):
+
+                    return text
 
         except Exception:
             continue
@@ -168,7 +215,7 @@ def detect_application_method(page):
         unknown
 
     This function only detects the method.
-    It does not submit an application.
+    It does NOT submit an application.
     """
 
     body_text = page.locator(
@@ -203,6 +250,8 @@ def detect_application_method(page):
             "forward your cv",
             "submit your cv",
             "apply via email",
+            "forward application",
+            "email your application",
         ]
 
         has_email_instruction = any(
@@ -230,13 +279,11 @@ def detect_application_method(page):
         "a"
     ).all()
 
-    # First inspect all "Apply" links.
     for link in application_links:
 
         try:
 
             text = link.inner_text().strip()
-            normalized_link_text = text.lower()
 
             href = link.get_attribute(
                 "href"
@@ -245,18 +292,28 @@ def detect_application_method(page):
             if not href:
                 continue
 
-            if "apply" not in normalized_link_text:
+            normalized_link_text = text.lower()
+
+            # Only consider links that actually look like
+            # application links.
+            if not any(
+                word in normalized_link_text
+                for word in [
+                    "apply",
+                    "application",
+                    "submit",
+                ]
+            ):
+
                 continue
 
-            # Convert relative URL to absolute URL.
-            if href.startswith("/"):
-                href = (
-                    "https://www.myjobmag.co.ke"
-                    + href
-                )
+            href = urljoin(
+                BASE_URL,
+                href,
+            )
 
             # ------------------------------------------------
-            # MyJobMag on-site application.
+            # MyJobMag on-site application
             # ------------------------------------------------
 
             if "/job-application/" in href:
@@ -269,7 +326,7 @@ def detect_application_method(page):
                 }
 
             # ------------------------------------------------
-            # External application.
+            # External application
             # ------------------------------------------------
 
             if (
@@ -322,7 +379,7 @@ def inspect_job(page, job_url):
     print(f"URL: {job_url}")
 
     # --------------------------------------------------------
-    # Navigate to the job.
+    # Navigate to the job
     # --------------------------------------------------------
 
     response = page.goto(
@@ -331,10 +388,12 @@ def inspect_job(page, job_url):
         timeout=30000,
     )
 
-    print("Job navigation started.")
+    print(
+        "Job navigation started."
+    )
 
     # --------------------------------------------------------
-    # Wait for the page to finish loading.
+    # Wait for page
     # --------------------------------------------------------
 
     try:
@@ -344,7 +403,9 @@ def inspect_job(page, job_url):
             timeout=15000,
         )
 
-        print("Job page loaded.")
+        print(
+            "Job page loaded."
+        )
 
     except Exception:
 
@@ -354,7 +415,7 @@ def inspect_job(page, job_url):
         )
 
     # --------------------------------------------------------
-    # Status.
+    # Status
     # --------------------------------------------------------
 
     if response:
@@ -364,7 +425,7 @@ def inspect_job(page, job_url):
         )
 
     # --------------------------------------------------------
-    # Page title.
+    # Page title
     # --------------------------------------------------------
 
     print(
@@ -376,8 +437,13 @@ def inspect_job(page, job_url):
     # ========================================================
 
     print()
-    print("APPLICATION METHOD")
-    print("-" * 60)
+    print(
+        "APPLICATION METHOD"
+    )
+
+    print(
+        "-" * 60
+    )
 
     application = detect_application_method(
         page
@@ -410,8 +476,13 @@ def inspect_job(page, job_url):
     # ========================================================
 
     print()
-    print("HEADINGS")
-    print("-" * 60)
+    print(
+        "HEADINGS"
+    )
+
+    print(
+        "-" * 60
+    )
 
     headings = page.locator(
         "h1, h2, h3"
@@ -437,8 +508,13 @@ def inspect_job(page, job_url):
     # ========================================================
 
     print()
-    print("BUTTONS")
-    print("-" * 60)
+    print(
+        "BUTTONS"
+    )
+
+    print(
+        "-" * 60
+    )
 
     buttons = page.locator(
         "button"
@@ -464,8 +540,13 @@ def inspect_job(page, job_url):
     # ========================================================
 
     print()
-    print("APPLICATION-RELATED LINKS")
-    print("-" * 60)
+    print(
+        "APPLICATION-RELATED LINKS"
+    )
+
+    print(
+        "-" * 60
+    )
 
     links = page.locator(
         "a"
@@ -493,6 +574,11 @@ def inspect_job(page, job_url):
 
             if not href:
                 continue
+
+            href = urljoin(
+                BASE_URL,
+                href,
+            )
 
             combined = (
                 f"{text} {href}"
@@ -536,8 +622,13 @@ def inspect_job(page, job_url):
     # ========================================================
 
     print()
-    print("APPLICATION TEXT SEARCH")
-    print("-" * 60)
+    print(
+        "APPLICATION TEXT SEARCH"
+    )
+
+    print(
+        "-" * 60
+    )
 
     body_text = page.locator(
         "body"
@@ -575,7 +666,9 @@ def inspect_job(page, job_url):
                 start:end
             ]:
 
-                cleaned = surrounding_line.strip()
+                cleaned = (
+                    surrounding_line.strip()
+                )
 
                 if cleaned:
 
@@ -588,6 +681,7 @@ def inspect_job(page, job_url):
             )
 
             if section_text in printed_sections:
+
                 continue
 
             printed_sections.add(
@@ -623,7 +717,7 @@ def inspect_job(page, job_url):
 def open_myjobmag():
     """
     Launch Chromium, open the MyJobMag Python jobs page,
-    and inspect one test job.
+    collect jobs, and inspect one test job.
 
     Nothing is submitted.
     """
@@ -708,8 +802,7 @@ def open_myjobmag():
         ):
 
             print(
-                f"{index}. "
-                f"{job['title']}"
+                f"{index}. {job['title']}"
             )
 
             print(
