@@ -806,26 +806,32 @@ def extract_text_by_label(soup: BeautifulSoup, labels: List[str]) -> str:
 
     return ""
 
-
 # ============================================================
 # COMPANY EXTRACTION
 # ============================================================
 
 def extract_company(soup: BeautifulSoup) -> str:
     """
-    Extract employer/company name.
+    Extract employer/company name from a BrighterMonday job page.
 
-    The order is important:
+    Priority:
+        1. JobPosting JSON-LD
+        2. Explicit company/employer HTML selectors
+        3. Company/employer labels
+        4. Employer link near the job title
+        5. Meta tags
+        6. Page text patterns
 
-    1. JobPosting JSON-LD
-    2. Explicit company selectors
-    3. Company/employer labels
-    4. Job-page heading structure
-    5. Meta tags
-    6. Safe fallback
-
-    Never return generic values such as "Employers".
+    Rejects BrighterMonday UI text such as:
+        - Easy Apply
+        - New
+        - Popular
+        - 5 days ago
+        - Software & Data
+        - Full Time
+        - Nairobi
     """
+
     invalid_values = {
         "",
         "brightermonday",
@@ -842,33 +848,104 @@ def extract_company(soup: BeautifulSoup) -> str:
         "sign in",
         "login",
         "confidential",
+        "easy apply",
+        "new",
+        "popular",
+        "share link",
+        "share",
+        "apply now",
+        "view job",
+        "read more",
+        "see more",
+    }
+
+    blocked_phrases = [
+        "brightermonday",
+        "email address",
+        "notify me",
+        "read our",
+        "protection of your data",
+        "sign in",
+        "log in",
+        "job alert",
+        "search jobs",
+        "filter results",
+        "easy apply",
+        "apply now",
+        "share link",
+    ]
+
+    blocked_exact = {
+        "software & data",
+        "software and data",
+        "full time",
+        "full-time",
+        "part time",
+        "part-time",
+        "internship",
+        "internship & graduate",
+        "internship and graduate",
+        "nairobi",
+        "mombasa",
+        "kisumu",
+        "nakuru",
+        "eldoret",
+        "thika",
+        "kenya",
+        "new",
+        "popular",
+        "easy apply",
+        "easy apply new popular",
     }
 
     def valid_company(value: str) -> bool:
         value = clean_value(value)
+
         if not value:
             return False
-        lower = value.lower()
+
+        lower = value.lower().strip()
+
+        # Exact invalid values
         if lower in invalid_values:
             return False
 
-        blocked_phrases = [
-            "brightermonday",
-            "email address",
-            "notify me",
-            "read our",
-            "protection of your data",
-            "sign in",
-            "log in",
-            "job alert",
-            "search jobs",
-            "filter results",
-        ]
+        # Exact UI values
+        if lower in blocked_exact:
+            return False
+
+        # UI / BrighterMonday phrases
         if any(phrase in lower for phrase in blocked_phrases):
             return False
 
+        # Reject obvious relative dates
+        if re.search(
+            r"\b\d+\s+(day|days|week|weeks|month|months|hour|hours)\s+ago\b",
+            lower,
+        ):
+            return False
+
+        # Reject date-like values
+        if re.search(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", lower):
+            return False
+
+        # Reject very short generic words
+        if len(lower.split()) == 1 and lower in {
+            "new",
+            "popular",
+            "share",
+            "apply",
+            "jobs",
+            "job",
+            "career",
+            "careers",
+        }:
+            return False
+
+        # Company names should not be enormous chunks of page text
         if len(value) > 150:
             return False
+
         if len(value.split()) > 15:
             return False
 
@@ -877,19 +954,25 @@ def extract_company(soup: BeautifulSoup) -> str:
     # --------------------------------------------------------
     # Strategy 1: JobPosting JSON-LD
     # --------------------------------------------------------
+
     for data in get_job_posting_json_ld(soup):
         organization = data.get("hiringOrganization")
+
         if isinstance(organization, dict):
             company = organization.get("name", "")
+
             if valid_company(company):
                 return clean_value(company)
+
         elif isinstance(organization, str):
+
             if valid_company(organization):
                 return clean_value(organization)
 
     # --------------------------------------------------------
-    # Strategy 2: Explicit company selectors
+    # Strategy 2: Explicit company/employer selectors
     # --------------------------------------------------------
+
     selectors = [
         "[data-testid*='company']",
         "[data-testid*='employer']",
@@ -902,60 +985,113 @@ def extract_company(soup: BeautifulSoup) -> str:
     ]
 
     for selector in selectors:
+
         for element in soup.select(selector):
-            value = clean_text(element.get_text(" ", strip=True))
+
+            value = clean_text(
+                element.get_text(" ", strip=True)
+            )
+
             if valid_company(value):
                 return clean_value(value)
 
     # --------------------------------------------------------
-    # Strategy 3: Look for company/employer labels.
+    # Strategy 3: Explicit company/employer labels
     # --------------------------------------------------------
+
     company = extract_text_by_label(
-        soup, ["company", "employer", "organisation", "organization"]
+        soup,
+        [
+            "company",
+            "employer",
+            "organisation",
+            "organization",
+        ],
     )
+
     if valid_company(company):
         return clean_value(company)
 
     # --------------------------------------------------------
-    # Strategy 4: Job page heading structure.
-    #
-    # Current BrighterMonday pages place the employer
-    # immediately around the main job heading.
+    # Strategy 4: Look for employer links near the title
     # --------------------------------------------------------
+
     title_element = soup.find("h1")
 
     if title_element:
+
+        # Look at nearby links first.
+        for element in title_element.find_all_next("a", limit=15):
+
+            value = clean_text(
+                element.get_text(" ", strip=True)
+            )
+
+            if not valid_company(value):
+                continue
+
+            href = element.get("href", "").lower()
+
+            # Company links are often internal company/employer links.
+            if (
+                "company" in href
+                or "employer" in href
+                or "companies" in href
+                or "employers" in href
+            ):
+                return clean_value(value)
+
+    # --------------------------------------------------------
+    # Strategy 5: Heading structure
+    # --------------------------------------------------------
+
+    if title_element:
+
         candidates = []
 
-        for element in title_element.find_all_next(limit=10):
-            if element.name not in {"h2", "h3", "a", "span", "div"}:
+        for element in title_element.find_all_next(
+            limit=15
+        ):
+
+            if element.name not in {
+                "h2",
+                "h3",
+                "a",
+                "span",
+                "div",
+            }:
                 continue
-            text = clean_text(element.get_text(" ", strip=True))
+
+            text = clean_text(
+                element.get_text(" ", strip=True)
+            )
+
             if not text:
                 continue
-            if text.lower() == normalize_title(extract_title(soup)):
-                continue
-            candidates.append(text)
 
+            if text.lower() == normalize_title(
+                extract_title(soup)
+            ):
+                continue
+
+            if valid_company(text):
+                candidates.append(text)
+
+        # Prefer candidates that look like real company names.
         for candidate in candidates:
+
+            lower = candidate.lower()
+
+            if lower in blocked_exact:
+                continue
+
             if valid_company(candidate):
-                lower = candidate.lower()
-                if lower in {
-                    "software & data",
-                    "software and data",
-                    "full time",
-                    "part time",
-                    "internship & graduate",
-                    "nairobi",
-                    "kenya",
-                    "confidential",
-                }:
-                    continue
                 return clean_value(candidate)
 
     # --------------------------------------------------------
-    # Strategy 5: Meta tags
+    # Strategy 6: Meta tags
     # --------------------------------------------------------
+
     meta_selectors = [
         "meta[name='author']",
         "meta[name='company']",
@@ -964,16 +1100,23 @@ def extract_company(soup: BeautifulSoup) -> str:
     ]
 
     for selector in meta_selectors:
+
         element = soup.select_one(selector)
+
         if not element:
             continue
-        value = clean_text(element.get("content", ""))
+
+        value = clean_text(
+            element.get("content", "")
+        )
+
         if valid_company(value):
             return clean_value(value)
 
     # --------------------------------------------------------
-    # Strategy 6: Page text patterns
+    # Strategy 7: Page text patterns
     # --------------------------------------------------------
+
     page_text = soup.get_text("\n", strip=True)
 
     patterns = [
@@ -982,14 +1125,21 @@ def extract_company(soup: BeautifulSoup) -> str:
     ]
 
     for pattern in patterns:
-        matches = re.finditer(pattern, page_text, flags=re.IGNORECASE)
+
+        matches = re.finditer(
+            pattern,
+            page_text,
+            flags=re.IGNORECASE,
+        )
+
         for match in matches:
+
             value = clean_text(match.group(1))
+
             if valid_company(value):
                 return clean_value(value)
 
     return "Unknown Company"
-
 
 # ============================================================
 # TITLE
