@@ -1,894 +1,886 @@
-
 """
-Main job-search automation pipeline.
+Main job application automation pipeline.
 
 Pipeline:
 
     MyJobMag + BrighterMonday
             ↓
-      Collect job links
+        Collect links
             ↓
-      Inspect jobs with Playwright
+        Inspect jobs
             ↓
-      Match jobs against candidate profile
+        Match against candidate profile
             ↓
-      Save results to job tracker
+        Save to job tracker
             ↓
-      Identify APPLY jobs
+        Prepare applications for APPLY jobs
 
-This module does NOT submit applications.
+Automatic application submission is disabled.
 """
+
+from pathlib import Path
+import re
+
+
+# ============================================================
+# BROWSER
+# ============================================================
 
 from scripts.browser.browser import (
     launch_browser,
     close_browser,
 )
 
+
+# ============================================================
+# MYJOBMAG BROWSER LAYER
+# ============================================================
+
 from scripts.browser.myjobmag import (
     MYJOBMAG_URL,
-    collect_job_links as collect_myjobmag_job_links,
+    collect_job_links as collect_myjobmag_links,
     inspect_job as inspect_myjobmag_job,
 )
 
+
+# ============================================================
+# BRIGHTERMONDAY BROWSER LAYER
+# ============================================================
+
 from scripts.browser.brighter_monday import (
-    collect_job_links as collect_brightermonday_job_links,
-    get_job_details as inspect_brightermonday_job,
+    collect_job_links as collect_brightermonday_links,
+    
 )
 
+
+# ============================================================
+# MATCHING
+# ============================================================
+
 from scripts.job_matcher import calculate_match
+
+
+# ============================================================
+# TRACKING
+# ============================================================
+
 from scripts.job_tracker import save_job
+
+
+# ============================================================
+# APPLICATION PREPARATION
+# ============================================================
+
+try:
+    from scripts.cv_tailor import tailor_cv
+except ImportError:
+    tailor_cv = None
+
+
+try:
+    from scripts.cover_letter import save_cover_letter
+except ImportError:
+    save_cover_letter = None
+
+
+try:
+    from scripts.job_tracker import update_application_documents
+except ImportError:
+    update_application_documents = None
 
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
+# Keep this small while testing.
+#
+# Set to None when the pipeline is confirmed to be working.
 MAX_JOBS = 3
 
-ENABLE_MYJOBMAG = True
-ENABLE_BRIGHTERMONDAY = True
+
+# Automatic application submission is intentionally disabled.
+AUTO_SUBMIT_APPLICATIONS = False
+
+
+# Directory for generated application documents.
+APPLICATIONS_DIR = Path("applications")
 
 
 # ============================================================
-# HELPERS
+# GENERAL HELPERS
 # ============================================================
 
-def get_page_text(page):
-    """Safely extract visible text from the current page."""
+def clean_text(value):
+    """
+    Normalize whitespace.
 
-    try:
-        return page.locator("body").inner_text()
-    except Exception:
+    Returns an empty string when value is missing.
+    """
+
+    if not value:
         return ""
 
-
-def get_job_title(page, fallback_title=""):
-    """Try to obtain the actual job title from the page."""
-
-    try:
-        headings = page.locator("h1, h2").all()
-    except Exception:
-        headings = []
-
-    for heading in headings:
-        try:
-            text = heading.inner_text().strip()
-
-            if text:
-                return text
-
-        except Exception:
-            continue
-
-    return fallback_title
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value)
+    ).strip()
 
 
-def should_prepare_application(match_result):
-    """Return True only when the matcher recommends APPLY."""
+def get_job_title(job):
+    """
+    Safely return the job title.
+    """
 
-    recommendation = match_result.get(
-        "recommendation",
-        "",
+    return clean_text(
+        job.get(
+            "title",
+            "Unknown title"
+        )
     )
 
-    return str(recommendation).upper() == "APPLY"
 
-
-def normalize_job(job):
+def get_job_description(job):
     """
-    Make sure jobs from different sources have the same
-    basic fields.
+    Safely return the job description.
     """
 
-    normalized = dict(job)
-
-    fields = [
-        "title",
-        "company",
-        "location",
-        "job_type",
-        "qualification",
-        "experience_level",
-        "experience_length",
-        "experience",
-        "posted",
-        "deadline",
-        "description",
-        "url",
-        "application_method",
-        "application_url",
-        "application_email",
-        "application_subject",
-        "source",
-    ]
-
-    for field in fields:
-        normalized.setdefault(field, "")
-
-    return normalized
+    return clean_text(
+        job.get(
+            "description",
+            ""
+        )
+    )
 
 
-def build_tracker_record(
+# ============================================================
+# APPLICATION PREPARATION HELPERS
+# ============================================================
+
+def create_application_directory(job):
+    """
+    Create a safe directory for one job application.
+    """
+
+    company = clean_text(
+        job.get(
+            "company",
+            "unknown-company"
+        )
+    )
+
+    title = clean_text(
+        job.get(
+            "title",
+            "unknown-job"
+        )
+    )
+
+    directory_name = (
+        f"{company}-{title}"
+    )
+
+    directory_name = directory_name.lower()
+
+    directory_name = re.sub(
+        r"[^a-z0-9]+",
+        "-",
+        directory_name
+    )
+
+    directory_name = directory_name.strip("-")
+
+    if not directory_name:
+        directory_name = "application"
+
+    return (
+        APPLICATIONS_DIR
+        / directory_name
+    )
+
+
+def prepare_application_documents(
     job,
-    match_result,
-    application,
+    match_result
 ):
-    """Build a record compatible with the job tracker."""
+    """
+    Generate a tailored CV and cover letter
+    for a job recommended as APPLY.
+
+    No application is submitted.
+    """
+
+    if tailor_cv is None:
+        raise RuntimeError(
+            "scripts.cv_tailor.tailor_cv could not be imported."
+        )
+
+    if save_cover_letter is None:
+        raise RuntimeError(
+            "scripts.cover_letter.save_cover_letter "
+            "could not be imported."
+        )
+
+    application_directory = (
+        create_application_directory(job)
+    )
+
+    application_directory.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    print()
+    print(
+        "APPLICATION PREPARATION"
+    )
+    print("-" * 60)
+
+    print(
+        "Generating tailored CV..."
+    )
+
+    cv_file = tailor_cv(
+        job,
+        application_directory
+    )
+
+    print(
+        f"✓ Tailored CV: {cv_file}"
+    )
+
+    print(
+        "Generating cover letter..."
+    )
+
+    cover_letter_file = save_cover_letter(
+        job,
+        match_result,
+        application_directory
+    )
+
+    print(
+        f"✓ Cover letter: {cover_letter_file}"
+    )
+
+    # --------------------------------------------------------
+    # Update tracker with generated documents.
+    # --------------------------------------------------------
+
+    if update_application_documents is not None:
+
+        try:
+
+            update_application_documents(
+                job.get(
+                    "url",
+                    ""
+                ),
+                cv_path=cv_file,
+                cover_letter_path=cover_letter_file,
+            )
+
+            print(
+                "✓ Tracker updated with application documents."
+            )
+
+        except Exception as error:
+
+            print(
+                "⚠ Could not update tracker with "
+                f"application documents: {error}"
+            )
 
     return {
-        "Job Title": job.get("title", ""),
-        "Company": job.get("company", ""),
-        "Location": job.get("location", ""),
-        "Posted": job.get("posted", ""),
-        "Deadline": job.get("deadline", ""),
-        "URL": job.get("url", ""),
-
-        "Score": match_result.get("score", 0),
-        "Category": match_result.get("category", ""),
-        "Recommendation": match_result.get(
-            "recommendation",
-            "",
+        "application_directory": str(
+            application_directory
         ),
-
-        "Role Match": ", ".join(
-            match_result.get(
-                "role_matches",
-                [],
-            )
+        "cv_file": str(
+            cv_file
         ),
-
-        "Matching Skills": ", ".join(
-            match_result.get(
-                "matching_skills",
-                [],
-            )
+        "cover_letter_file": str(
+            cover_letter_file
         ),
-
-        "Missing Skills": ", ".join(
-            match_result.get(
-                "missing_skills",
-                [],
-            )
-        ),
-
-        "Warnings": " | ".join(
-            match_result.get(
-                "warnings",
-                [],
-            )
-        ),
-
-        "Application Method": application.get(
-            "method",
-            "unknown",
-        ),
-
-        "Application Email": application.get(
-            "email",
-            "",
-        ),
-
-        "Application Subject": application.get(
-            "subject",
-            "",
-        ),
-
-        "Application URL": application.get(
-            "url",
-            "",
-        ),
-
-        "Application Status": "Not Applied",
-        "Review Decision": "",
-        "CV Version": "",
-        "Cover Letter": "",
-        "Notes": "",
     }
 
 
 # ============================================================
-# SOURCE INSPECTION
+# DISPLAY MATCH RESULT
 # ============================================================
 
-def inspect_collected_job(page, job):
+def display_match_result(
+    match_result
+):
     """
-    Inspect a job using the browser layer belonging to its source.
+    Display the important matcher results.
     """
 
-    source = str(
-        job.get(
-            "source",
-            "",
-        )
-    ).lower()
-
-    # --------------------------------------------------------
-    # MyJobMag
-    # --------------------------------------------------------
-
-    if source == "myjobmag":
-
-        return inspect_myjobmag_job(
-            page,
-            job["url"],
-        )
-
-    # --------------------------------------------------------
-    # BrighterMonday
-    # --------------------------------------------------------
-
-    if source == "brightermonday":
-
-        details = inspect_brightermonday_job(
-            page,
-            job,
-        )
-
-        if not details:
-            return None
-
-        application = {
-            "method": details.get(
-                "application_method",
-                "brightermonday",
-            ),
-
-            "email": details.get(
-                "application_email",
-                "",
-            ),
-
-            "subject": details.get(
-                "application_subject",
-                "",
-            ),
-
-            "url": details.get(
-                "application_url",
-                "",
-            ),
-        }
-
-        return {
-            "title": details.get(
-                "title",
-                job.get(
-                    "title",
-                    "",
-                ),
-            ),
-
-            "company": details.get(
-                "company",
-                "",
-            ),
-
-            "location": details.get(
-                "location",
-                "",
-            ),
-
-            "job_type": details.get(
-                "job_type",
-                "",
-            ),
-
-            "qualification": details.get(
-                "qualification",
-                "",
-            ),
-
-            "experience_level": details.get(
-                "experience_level",
-                "",
-            ),
-
-            "experience_length": details.get(
-                "experience_length",
-                "",
-            ),
-
-            "experience": details.get(
-                "experience",
-                "",
-            ),
-
-            "posted": details.get(
-                "posted",
-                "",
-            ),
-
-            "deadline": details.get(
-                "deadline",
-                "",
-            ),
-
-            "description": details.get(
-                "description",
-                "",
-            ),
-
-            "application": application,
-        }
-
-    raise ValueError(
-        f"Unsupported job source: {source}"
+    print()
+    print(
+        "MATCH RESULT"
     )
+    print("-" * 60)
+
+    print(
+        f"Score: "
+        f"{match_result.get('score', 0)}%"
+    )
+
+    print(
+        f"Category: "
+        f"{match_result.get('category', '')}"
+    )
+
+    print(
+        f"Recommendation: "
+        f"{match_result.get('recommendation', '')}"
+    )
+
+    role_matches = match_result.get(
+        "role_matches",
+        []
+    )
+
+    matching_skills = match_result.get(
+        "matching_skills",
+        []
+    )
+
+    missing_skills = match_result.get(
+        "missing_skills",
+        []
+    )
+
+    warnings = match_result.get(
+        "warnings",
+        []
+    )
+
+    print(
+        "Role matches: "
+        + (
+            ", ".join(
+                str(value)
+                for value in role_matches
+            )
+            if role_matches
+            else "None"
+        )
+    )
+
+    print(
+        "Matching skills: "
+        + (
+            ", ".join(
+                str(value)
+                for value in matching_skills
+            )
+            if matching_skills
+            else "None"
+        )
+    )
+
+    print(
+        "Missing skills: "
+        + (
+            ", ".join(
+                str(value)
+                for value in missing_skills
+            )
+            if missing_skills
+            else "None"
+        )
+    )
+
+    if warnings:
+
+        print(
+            "Warnings:"
+        )
+
+        for warning in warnings:
+
+            print(
+                f"  ⚠ {warning}"
+            )
 
 
 # ============================================================
 # PROCESS ONE JOB
 # ============================================================
 
-def process_job(page, job):
+def process_job(
+    page,
+    context,
+    job
+):
     """
-    Inspect, match and save one job.
+    Inspect, match and track one job.
 
-    No application is submitted.
+    Parameters
+    ----------
+    page:
+        Shared Playwright page used by MyJobMag.
+
+    context:
+        Shared Playwright browser context used by
+        BrighterMonday.
+
+    job:
+        Job dictionary containing at least:
+            source
+            title
+            url
+
+    Returns
+    -------
+    dict or None
+        Processing result.
     """
 
-    job = normalize_job(job)
+    print()
+    print(
+        "=" * 70
+    )
+    print(
+        "PROCESSING JOB"
+    )
+    print(
+        "=" * 70
+    )
 
-    source = str(
+    source = clean_text(
         job.get(
             "source",
-            "unknown",
+            ""
         )
     ).lower()
 
-    print()
-    print("=" * 70)
-    print("PROCESSING JOB")
-    print("=" * 70)
+    title = get_job_title(
+        job
+    )
+
+    url = clean_text(
+        job.get(
+            "url",
+            ""
+        )
+    )
 
     print(
         f"Source: {source}"
     )
 
     print(
-        f"Title: {job.get('title', 'Unknown')}"
+        f"Title: {title}"
     )
 
     print(
-        f"URL: {job.get('url', '')}"
+        f"URL: {url}"
     )
+
+    if not url:
+
+        print(
+            "✗ Job has no URL."
+        )
+
+        return None
+
+    # ========================================================
+    # INSPECTION
+    # ========================================================
 
     try:
 
-        # ----------------------------------------------------
-        # 1. INSPECT
-        # ----------------------------------------------------
-
-        inspection = inspect_collected_job(
-            page,
-            job,
-        )
-
-        if not inspection:
+        if source == "myjobmag":
 
             print()
             print(
-                "✗ Unable to inspect job."
+                "Inspecting with MyJobMag browser layer..."
             )
 
-            return {
-                "success": False,
-                "job": job,
-                "error": "Job inspection failed.",
-                "prepare_application": False,
-            }
-
-        # ----------------------------------------------------
-        # 2. APPLICATION INFORMATION
-        # ----------------------------------------------------
-
-        application = inspection.get(
-            "application",
-            {},
-        )
-
-        if not application:
-
-            application = {
-                "method": job.get(
-                    "application_method",
-                    "unknown",
-                ),
-
-                "email": job.get(
-                    "application_email",
-                    "",
-                ),
-
-                "subject": job.get(
-                    "application_subject",
-                    "",
-                ),
-
-                "url": job.get(
-                    "application_url",
-                    "",
-                ),
-            }
-
-        print()
-        print("APPLICATION METHOD")
-        print("-" * 60)
-
-        print(
-            "Method:",
-            application.get(
-                "method",
-                "unknown",
-            ),
-        )
-
-        if application.get("email"):
-
-            print(
-                "Email:",
-                application["email"],
-            )
-
-        if application.get("subject"):
-
-            print(
-                "Subject:",
-                application["subject"],
-            )
-
-        if application.get("url"):
-
-            print(
-                "URL:",
-                application["url"],
-            )
-
-        # ----------------------------------------------------
-        # 3. PAGE CONTENT
-        # ----------------------------------------------------
-
-        page_text = get_page_text(page)
-
-        actual_title = (
-            inspection.get(
-                "title",
-                "",
-            )
-            or get_job_title(
+            inspected_job = inspect_myjobmag_job(
                 page,
-                job.get(
-                    "title",
-                    "",
-                ),
+                url
             )
-        )
 
-        print()
-        print(
-            f"Actual title: {actual_title}"
-        )
+        elif source == "brightermonday":
 
-        # ----------------------------------------------------
-        # 4. MATCH
-        # ----------------------------------------------------
-
-        match_result = calculate_match(
-            actual_title,
-            page_text,
-        )
-
-        print()
-        print(
-            f"Match score: "
-            f"{match_result.get('score', 0)}%"
-        )
-
-        print(
-            f"Category: "
-            f"{match_result.get('category', '')}"
-        )
-
-        print(
-            f"Recommendation: "
-            f"{match_result.get('recommendation', '')}"
-        )
-
-        print()
-        print(
-            "Matching skills:",
-            ", ".join(
-                match_result.get(
-                    "matching_skills",
-                    [],
-                )
-            )
-            or "None",
-        )
-
-        print(
-            "Missing skills:",
-            ", ".join(
-                match_result.get(
-                    "missing_skills",
-                    [],
-                )
-            )
-            or "None",
-        )
-
-        warnings = match_result.get(
-            "warnings",
-            [],
-        )
-
-        if warnings:
-
+            print()
             print(
-                "Warnings:",
-                " | ".join(warnings),
+                "Inspecting with BrighterMonday "
+                "browser layer..."
             )
 
-        # ----------------------------------------------------
-        # 5. APPLICATION PREPARATION
-        # ----------------------------------------------------
-
-        prepare_application = (
-            should_prepare_application(
-                match_result
-            )
-        )
-
-        print()
-
-        if prepare_application:
-
-            print(
-                "Application preparation: READY"
+            inspected_job = (
+                inspect_brightermonday_job(
+                    context,
+                    url,
+                    title
+                )
             )
 
         else:
 
-            print(
-                "Application preparation: "
-                "NOT SELECTED"
+            raise ValueError(
+                f"Unsupported job source: {source}"
             )
-
-        # ----------------------------------------------------
-        # 6. PREPARE JOB FOR TRACKER
-        # ----------------------------------------------------
-
-        job_for_tracker = dict(job)
-
-        job_for_tracker["title"] = (
-            actual_title
-        )
-
-        fields_from_inspection = [
-            "company",
-            "location",
-            "job_type",
-            "qualification",
-            "experience_level",
-            "experience_length",
-            "experience",
-            "posted",
-            "deadline",
-            "description",
-        ]
-
-        for field in fields_from_inspection:
-
-            value = inspection.get(
-                field,
-                "",
-            )
-
-            if value:
-                job_for_tracker[field] = value
-
-        job_for_tracker[
-            "application_method"
-        ] = application.get(
-            "method",
-            "",
-        )
-
-        job_for_tracker[
-            "application_email"
-        ] = application.get(
-            "email",
-            "",
-        )
-
-        job_for_tracker[
-            "application_subject"
-        ] = application.get(
-            "subject",
-            "",
-        )
-
-        job_for_tracker[
-            "application_url"
-        ] = application.get(
-            "url",
-            "",
-        )
-
-        # ----------------------------------------------------
-        # 7. BUILD TRACKER RECORD
-        # ----------------------------------------------------
-
-        tracker_record = build_tracker_record(
-            job_for_tracker,
-            match_result,
-            application,
-        )
-
-        # ----------------------------------------------------
-        # 8. SAVE
-        # ----------------------------------------------------
-
-        saved = save_job(
-            tracker_record,
-            match_result,
-        )
-
-        print()
-
-        if saved:
-
-            print(
-                "✓ Job saved to tracker."
-            )
-
-        else:
-
-            print(
-                "Already in tracker."
-            )
-
-        # ----------------------------------------------------
-        # 9. RETURN
-        # ----------------------------------------------------
-
-        return {
-            "success": True,
-            "job": job_for_tracker,
-            "match": match_result,
-            "application": application,
-            "prepare_application": (
-                prepare_application
-            ),
-            "saved": saved,
-        }
 
     except Exception as error:
 
-        print()
         print(
-            f"✗ Error processing job: {error}"
+            f"✗ Inspection error: {error}"
         )
 
-        return {
-            "success": False,
-            "job": job,
-            "error": str(error),
-            "prepare_application": False,
-        }
+        raise
 
+    # ========================================================
+    # MERGE ORIGINAL + INSPECTED DATA
+    # ========================================================
 
-# ============================================================
-# MYJOBMAG COLLECTION
-# ============================================================
+    combined_job = {
+        **job,
+        **(
+            inspected_job
+            if inspected_job
+            else {}
+        ),
+    }
 
-def collect_myjobmag_jobs(page):
-    """Collect MyJobMag jobs using the shared browser page."""
-
-    print()
-    print("=" * 70)
-    print("MYJOBMAG COLLECTION")
-    print("=" * 70)
-
-    print()
-    print("Opening MyJobMag...")
-
-    response = page.goto(
-        MYJOBMAG_URL,
-        wait_until="commit",
-        timeout=30000,
+    # Preserve the original source.
+    combined_job["source"] = (
+        job.get(
+            "source",
+            inspected_job.get(
+                "source",
+                ""
+            )
+            if inspected_job
+            else ""
+        )
     )
 
-    print(
-        "MyJobMag navigation started."
+    # Preserve the original URL.
+    if not combined_job.get("url"):
+        combined_job["url"] = url
+
+    # Preserve the original title if inspection
+    # failed to extract one.
+    if not combined_job.get("title"):
+        combined_job["title"] = title
+
+    # ========================================================
+    # NORMALIZE COMMON FIELDS
+    # ========================================================
+
+    combined_job["title"] = clean_text(
+        combined_job.get(
+            "title",
+            title
+        )
     )
 
-    try:
-
-        page.wait_for_load_state(
-            "domcontentloaded",
-            timeout=15000,
+    combined_job["company"] = clean_text(
+        combined_job.get(
+            "company",
+            ""
         )
-
-        print(
-            "MyJobMag page loaded."
-        )
-
-    except Exception:
-
-        print(
-            "MyJobMag page did not reach "
-            "domcontentloaded. Continuing."
-        )
-
-    if response:
-
-        print(
-            f"Status: {response.status}"
-        )
-
-    print(
-        f"Title: {page.title()}"
     )
 
-    print()
-    print(
-        "Collecting MyJobMag job links..."
+    combined_job["location"] = clean_text(
+        combined_job.get(
+            "location",
+            ""
+        )
     )
 
-    jobs = collect_myjobmag_job_links(
-        page
+    combined_job["description"] = clean_text(
+        combined_job.get(
+            "description",
+            ""
+        )
     )
 
-    normalized_jobs = []
-
-    for job in jobs:
-
-        normalized = normalize_job(
-            job
+    combined_job["url"] = clean_text(
+        combined_job.get(
+            "url",
+            url
         )
+    )
 
-        normalized["source"] = "myjobmag"
-
-        normalized_jobs.append(
-            normalized
-        )
+    # ========================================================
+    # DISPLAY BASIC INFORMATION
+    # ========================================================
 
     print()
     print(
-        f"MyJobMag jobs found: "
-        f"{len(normalized_jobs)}"
+        "INSPECTED JOB"
+    )
+    print("-" * 60)
+
+    print(
+        f"Title: "
+        f"{combined_job.get('title', 'Not found')}"
     )
 
-    return normalized_jobs
+    print(
+        f"Company: "
+        f"{combined_job.get('company', 'Not found')}"
+    )
 
+    print(
+        f"Location: "
+        f"{combined_job.get('location', 'Not found')}"
+    )
 
-# ============================================================
-# BRIGHTERMONDAY COLLECTION
-# ============================================================
+    print(
+        f"Job Type: "
+        f"{combined_job.get('job_type', 'Not found')}"
+    )
 
-def collect_brightermonday_jobs(page):
-    """
-    Collect BrighterMonday jobs using the existing shared
-    Playwright page.
+    print(
+        f"Qualification: "
+        f"{combined_job.get('qualification', 'Not found')}"
+    )
 
-    We intentionally DO NOT call:
+    print(
+        f"Experience: "
+        f"{combined_job.get('experience', 'Not found')}"
+    )
 
-        brighter_monday.collect_jobs()
+    print(
+        f"Posted: "
+        f"{combined_job.get('posted', 'Not found')}"
+    )
 
-    because that function creates another sync_playwright()
-    instance and another browser.
+    print(
+        f"Deadline: "
+        f"{combined_job.get('deadline', 'Not found')}"
+    )
 
-    Instead we use its page-level functions directly.
-    """
+    description = combined_job.get(
+        "description",
+        ""
+    )
 
-    print()
-    print("=" * 70)
-    print("BRIGHTERMONDAY COLLECTION")
-    print("=" * 70)
+    print(
+        f"Description length: "
+        f"{len(description)}"
+    )
+
+    # ========================================================
+    # MATCH
+    # ========================================================
 
     print()
     print(
-        "Collecting BrighterMonday job links..."
+        "Calculating job match..."
     )
 
-    job_links = collect_brightermonday_job_links(
-        page
+    match_result = calculate_match(
+        combined_job.get(
+            "title",
+            ""
+        ),
+        description
     )
 
-    print()
-    print(
-        f"BrighterMonday technology jobs found: "
-        f"{len(job_links)}"
+    display_match_result(
+        match_result
     )
 
-    if not job_links:
+    # ========================================================
+    # APPLICATION INFORMATION
+    # ========================================================
 
-        print(
-            "No BrighterMonday jobs found."
-        )
-
-        return []
-
-    jobs = []
-
-    print()
-    print(
-        "Inspecting BrighterMonday jobs..."
+    application = combined_job.get(
+        "application",
+        {}
     )
 
-    for index, job in enumerate(
-        job_links,
-        start=1,
+    if not isinstance(
+        application,
+        dict
     ):
+        application = {}
+
+    application_method = (
+        combined_job.get(
+            "application_method"
+        )
+        or application.get(
+            "method",
+            ""
+        )
+    )
+
+    application_url = (
+        combined_job.get(
+            "application_url"
+        )
+        or application.get(
+            "url",
+            ""
+        )
+    )
+
+    application_email = (
+        combined_job.get(
+            "application_email"
+        )
+        or application.get(
+            "email",
+            ""
+        )
+    )
+
+    application_subject = (
+        combined_job.get(
+            "application_subject"
+        )
+        or application.get(
+            "subject",
+            ""
+        )
+    )
+
+    print()
+    print(
+        "APPLICATION INFORMATION"
+    )
+    print("-" * 60)
+
+    print(
+        f"Method: "
+        f"{application_method or 'Unknown'}"
+    )
+
+    if application_url:
+
+        print(
+            f"Application URL: "
+            f"{application_url}"
+        )
+
+    if application_email:
+
+        print(
+            f"Application Email: "
+            f"{application_email}"
+        )
+
+    if application_subject:
+
+        print(
+            f"Application Subject: "
+            f"{application_subject}"
+        )
+
+    # ========================================================
+    # SAVE TO TRACKER
+    # ========================================================
+
+    print()
+    print(
+        "Saving to job tracker..."
+    )
+
+    saved = save_job(
+        combined_job,
+        match_result
+    )
+
+    if saved:
+
+        print(
+            "✓ Job added to tracker."
+        )
+
+    else:
+
+        print(
+            "✓ Job already exists in tracker."
+        )
+
+    # ========================================================
+    # APPLICATION PREPARATION
+    # ========================================================
+
+    recommendation = clean_text(
+        match_result.get(
+            "recommendation",
+            ""
+        )
+    ).upper()
+
+    application_result = {}
+
+    if recommendation == "APPLY":
 
         print()
         print(
-            f"BrighterMonday job "
-            f"{index}/{len(job_links)}"
+            "Job recommendation is APPLY."
+        )
+
+        print(
+            "Preparing application documents..."
         )
 
         try:
 
-            details = inspect_brightermonday_job(
-                page,
-                job,
-            )
-
-            if not details:
-
-                print(
-                    "Could not retrieve job details."
+            application_result = (
+                prepare_application_documents(
+                    combined_job,
+                    match_result
                 )
-
-                continue
-
-            details = normalize_job(
-                details
-            )
-
-            details["source"] = (
-                "brightermonday"
-            )
-
-            jobs.append(
-                details
             )
 
         except Exception as error:
 
             print(
-                "BrighterMonday job error:",
-                error,
+                "✗ Application preparation failed:"
             )
 
-    print()
-    print(
-        "BrighterMonday details collected:",
-        len(jobs),
-    )
+            print(
+                f"  {error}"
+            )
 
-    return jobs
+    else:
+
+        print()
+        print(
+            "Application preparation skipped."
+        )
+
+        print(
+            f"Recommendation: {recommendation}"
+        )
+
+    # ========================================================
+    # FINAL RESULT
+    # ========================================================
+
+    result = {
+        **combined_job,
+        **match_result,
+        "application_method": (
+            application_method
+        ),
+        "application_url": (
+            application_url
+        ),
+        "application_email": (
+            application_email
+        ),
+        "application_subject": (
+            application_subject
+        ),
+        **application_result,
+    }
+
+    return result
 
 
 # ============================================================
@@ -897,24 +889,53 @@ def collect_brightermonday_jobs(page):
 
 def run_automation():
     """
-    Run the complete job-search automation pipeline.
+    Run the complete browser-based job automation pipeline.
     """
 
-    print("=" * 70)
-    print("JOB APPLICATION AUTOMATION")
-    print("=" * 70)
-
-    print()
-    print("Pipeline:")
-    print("MyJobMag + BrighterMonday")
-    print("        ↓")
-    print("Collect → Inspect → Match → Track")
-    print("        → Application Preparation")
-
-    print()
     print(
-        "Automatic application submission: DISABLED"
+        "=" * 70
     )
+
+    print(
+        "JOB APPLICATION AUTOMATION"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    print()
+
+    print(
+        "Pipeline:"
+    )
+
+    print(
+        "MyJobMag + BrighterMonday"
+    )
+
+    print(
+        "        ↓"
+    )
+
+    print(
+        "Collect → Inspect → Match → Track"
+    )
+
+    print(
+        "        → Application Preparation"
+    )
+
+    print()
+
+    print(
+        "Automatic application submission: "
+        f"{'ENABLED' if AUTO_SUBMIT_APPLICATIONS else 'DISABLED'}"
+    )
+
+    # ========================================================
+    # START BROWSER
+    # ========================================================
 
     print()
     print(
@@ -924,15 +945,9 @@ def run_automation():
     playwright = None
     browser = None
     context = None
-
-    all_jobs = []
-    results = []
+    page = None
 
     try:
-
-        # ----------------------------------------------------
-        # START SHARED BROWSER
-        # ----------------------------------------------------
 
         playwright, browser, context = (
             launch_browser(
@@ -940,72 +955,165 @@ def run_automation():
             )
         )
 
+        print(
+            "Browser page created."
+        )
+
+        # ----------------------------------------------------
+        # Shared page for MyJobMag.
+        #
+        # BrighterMonday creates its own pages from
+        # the shared browser context.
+        # ----------------------------------------------------
+
         page = context.new_page()
 
-        # ----------------------------------------------------
-        # MYJOBMAG
-        # ----------------------------------------------------
+        # ====================================================
+        # COLLECT JOBS
+        # ====================================================
 
         myjobmag_jobs = []
-
-        if ENABLE_MYJOBMAG:
-
-            try:
-
-                myjobmag_jobs = (
-                    collect_myjobmag_jobs(
-                        page
-                    )
-                )
-
-                all_jobs.extend(
-                    myjobmag_jobs
-                )
-
-            except Exception as error:
-
-                print()
-                print(
-                    "MyJobMag collection error:",
-                    error,
-                )
-
-        # ----------------------------------------------------
-        # BRIGHTERMONDAY
-        # ----------------------------------------------------
-
         brightermonday_jobs = []
 
-        if ENABLE_BRIGHTERMONDAY:
-
-            try:
-
-                brightermonday_jobs = (
-                    collect_brightermonday_jobs(
-                        page
-                    )
-                )
-
-                all_jobs.extend(
-                    brightermonday_jobs
-                )
-
-            except Exception as error:
-
-                print()
-                print(
-                    "BrighterMonday collection error:",
-                    error,
-                )
-
-        # ----------------------------------------------------
-        # COLLECTION SUMMARY
-        # ----------------------------------------------------
+        # ====================================================
+        # MYJOBMAG COLLECTION
+        # ====================================================
 
         print()
-        print("=" * 70)
-        print("JOB COLLECTION SUMMARY")
-        print("=" * 70)
+        print(
+            "=" * 70
+        )
+        print(
+            "MYJOBMAG COLLECTION"
+        )
+        print(
+            "=" * 70
+        )
+
+        try:
+
+            print(
+                "Opening MyJobMag..."
+            )
+
+            response = page.goto(
+                MYJOBMAG_URL,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+
+            if response:
+
+                print(
+                    f"Status: {response.status}"
+                )
+
+            page.wait_for_timeout(
+                1500
+            )
+
+            myjobmag_jobs = (
+                collect_myjobmag_links(
+                    page
+                )
+            )
+
+            for job in myjobmag_jobs:
+
+                job["source"] = (
+                    "myjobmag"
+                )
+
+            print()
+            print(
+                "MyJobMag jobs found: "
+                f"{len(myjobmag_jobs)}"
+            )
+
+        except Exception as error:
+
+            print(
+                "MyJobMag collection error: "
+                f"{error}"
+            )
+
+        # ====================================================
+        # BRIGHTERMONDAY COLLECTION
+        # ====================================================
+
+        print()
+        print(
+            "=" * 70
+        )
+        print(
+            "BRIGHTERMONDAY COLLECTION"
+        )
+        print(
+            "=" * 70
+        )
+
+        try:
+
+            print(
+                "Collecting BrighterMonday "
+                "job links..."
+            )
+
+            # IMPORTANT:
+            #
+            # BrighterMonday's current browser layer
+            # expects a BrowserContext, NOT a Page.
+            #
+            # It creates and closes its own pages.
+            #
+
+            brightermonday_jobs = (
+                collect_brightermonday_links(
+                    context
+                )
+            )
+
+            for job in brightermonday_jobs:
+
+                job["source"] = (
+                    "brightermonday"
+                )
+
+            print()
+            print(
+                "BrighterMonday technology "
+                "jobs found: "
+                f"{len(brightermonday_jobs)}"
+            )
+
+        except Exception as error:
+
+            print(
+                "BrighterMonday collection error: "
+                f"{error}"
+            )
+
+        # ====================================================
+        # COMBINE
+        # ====================================================
+
+        all_jobs = (
+            myjobmag_jobs
+            + brightermonday_jobs
+        )
+
+        print()
+        print(
+            "=" * 70
+        )
+
+        print(
+            "JOB COLLECTION SUMMARY"
+        )
+
+        print(
+            "=" * 70
+        )
 
         print()
         print(
@@ -1023,151 +1131,172 @@ def run_automation():
             f"{len(all_jobs)}"
         )
 
-        if not all_jobs:
+        # ====================================================
+        # LIMIT FOR TESTING
+        # ====================================================
 
-            print()
-            print(
-                "No jobs collected."
-            )
+        if MAX_JOBS is None:
 
-            return
+            jobs_to_process = all_jobs
 
-        # ----------------------------------------------------
-        # TEST LIMIT
-        # ----------------------------------------------------
+        else:
 
-        jobs_to_process = list(
-            all_jobs
-        )
-
-        if MAX_JOBS is not None:
-
-            jobs_to_process = (
-                jobs_to_process[:MAX_JOBS]
-            )
-
-            print()
-            print(
-                f"Testing with first "
-                f"{len(jobs_to_process)} jobs."
-            )
-
-        # ----------------------------------------------------
-        # PROCESS
-        # ----------------------------------------------------
+            jobs_to_process = all_jobs[
+                :MAX_JOBS
+            ]
 
         print()
-        print("=" * 70)
-        print("PROCESSING COLLECTED JOBS")
-        print("=" * 70)
-
-        for index, job in enumerate(
-            jobs_to_process,
-            start=1,
-        ):
-
-            print()
-            print(
-                f"[{index}/{len(jobs_to_process)}]"
-            )
-
-            result = process_job(
-                page,
-                job,
-            )
-
-            results.append(
-                result
-            )
-
-        # ----------------------------------------------------
-        # SUMMARY COUNTERS
-        # ----------------------------------------------------
-
-        successful = sum(
-            1
-            for result in results
-            if result.get("success")
+        print(
+            "Testing with first "
+            f"{len(jobs_to_process)} jobs."
         )
 
-        failed = (
-            len(results)
-            - successful
+        # ====================================================
+        # PROCESS JOBS
+        # ====================================================
+
+        print()
+        print(
+            "=" * 70
         )
 
-        apply_count = 0
-        review_count = 0
-        skip_count = 0
-        preparation_count = 0
+        print(
+            "PROCESSING COLLECTED JOBS"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        results = []
+
+        successful = 0
+        failed = 0
 
         myjobmag_processed = 0
         brightermonday_processed = 0
 
-        for result in results:
+        apply_count = 0
+        review_count = 0
+        skip_count = 0
 
-            if not result.get(
-                "success"
-            ):
-                continue
+        preparation_count = 0
 
-            source = str(
-                result.get(
-                    "job",
-                    {},
-                ).get(
+        for index, job in enumerate(
+            jobs_to_process,
+            start=1
+        ):
+
+            print()
+            print(
+                f"[{index}/"
+                f"{len(jobs_to_process)}]"
+            )
+
+            source = clean_text(
+                job.get(
                     "source",
-                    "",
+                    ""
                 )
             ).lower()
 
-            if source == "myjobmag":
+            try:
 
-                myjobmag_processed += 1
-
-            elif source == "brightermonday":
-
-                brightermonday_processed += 1
-
-            recommendation = str(
-                result.get(
-                    "match",
-                    {},
-                ).get(
-                    "recommendation",
-                    "",
+                result = process_job(
+                    page,
+                    context,
+                    job
                 )
-            ).upper()
 
-            if recommendation == "APPLY":
+                if result is None:
 
-                apply_count += 1
+                    failed += 1
 
-            elif recommendation == "REVIEW":
+                    continue
 
-                review_count += 1
+                results.append(
+                    result
+                )
 
-            elif recommendation == "SKIP":
+                successful += 1
 
-                skip_count += 1
+                # --------------------------------------------
+                # Source counters
+                # --------------------------------------------
 
-            if result.get(
-                "prepare_application",
-                False,
-            ):
+                if source == "myjobmag":
 
-                preparation_count += 1
+                    myjobmag_processed += 1
 
-        # ----------------------------------------------------
+                elif source == "brightermonday":
+
+                    brightermonday_processed += 1
+
+                # --------------------------------------------
+                # Recommendation counters
+                # --------------------------------------------
+
+                recommendation = (
+                    clean_text(
+                        result.get(
+                            "recommendation",
+                            ""
+                        )
+                    ).upper()
+                )
+
+                if recommendation == "APPLY":
+
+                    apply_count += 1
+
+                elif recommendation == "REVIEW":
+
+                    review_count += 1
+
+                elif recommendation == "SKIP":
+
+                    skip_count += 1
+
+                # --------------------------------------------
+                # Application preparation counter
+                # --------------------------------------------
+
+                if result.get(
+                    "cv_file"
+                ) and result.get(
+                    "cover_letter_file"
+                ):
+
+                    preparation_count += 1
+
+            except Exception as error:
+
+                failed += 1
+
+                print()
+                print(
+                    "Processing error: "
+                    f"{error}"
+                )
+
+        # ====================================================
         # FINAL SUMMARY
-        # ----------------------------------------------------
+        # ====================================================
 
         print()
-        print("=" * 70)
-        print("AUTOMATION COMPLETE")
-        print("=" * 70)
+        print(
+            "=" * 70
+        )
+
+        print(
+            "AUTOMATION COMPLETE"
+        )
+
+        print(
+            "=" * 70
+        )
 
         print()
-
         print(
             f"Jobs collected: "
             f"{len(all_jobs)}"
@@ -1230,23 +1359,57 @@ def run_automation():
 
         print(
             "Automatic application submission: "
-            "DISABLED"
+            f"{'ENABLED' if AUTO_SUBMIT_APPLICATIONS else 'DISABLED'}"
         )
+
+        print()
 
         print(
             "Results saved to the job tracker."
         )
 
+        return results
+
     except Exception as error:
 
         print()
-        print("=" * 70)
         print(
-            f"AUTOMATION ERROR: {error}"
+            "=" * 70
         )
-        print("=" * 70)
+
+        print(
+            "AUTOMATION ERROR"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            error
+        )
+
+        return []
 
     finally:
+
+        # ====================================================
+        # CLOSE SHARED PAGE
+        # ====================================================
+
+        if page:
+
+            try:
+
+                page.close()
+
+            except Exception:
+
+                pass
+
+        # ====================================================
+        # CLOSE BROWSER
+        # ====================================================
 
         if browser and playwright:
 
@@ -1255,10 +1418,19 @@ def run_automation():
                 "Closing browser..."
             )
 
-            close_browser(
-                playwright,
-                browser,
-            )
+            try:
+
+                close_browser(
+                    playwright,
+                    browser
+                )
+
+            except Exception as error:
+
+                print(
+                    "Browser close error: "
+                    f"{error}"
+                )
 
 
 # ============================================================
@@ -1266,4 +1438,5 @@ def run_automation():
 # ============================================================
 
 if __name__ == "__main__":
+
     run_automation()

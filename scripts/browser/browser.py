@@ -1,3 +1,4 @@
+
 """
 Reusable Playwright browser manager.
 
@@ -13,16 +14,8 @@ def launch_browser(headless=False):
     Launch Chromium and return the Playwright objects
     needed by the automation system.
 
-    Parameters
-    ----------
-    headless : bool
-        False opens a visible browser window.
-        True runs the browser in the background.
-
-    Returns
-    -------
-    tuple
-        (playwright, browser, context)
+    Returns:
+        tuple: (playwright, browser, context)
     """
 
     playwright = sync_playwright().start()
@@ -38,17 +31,16 @@ def launch_browser(headless=False):
     return playwright, browser, context
 
 
-def close_browser(
-    playwright,
-    browser
-):
+def close_browser(playwright, browser):
     """
     Close the browser and stop Playwright.
     """
 
-    browser.close()
+    if browser:
+        browser.close()
 
-    playwright.stop()
+    if playwright:
+        playwright.stop()
 
     print("Browser closed.")
 
@@ -61,6 +53,7 @@ if __name__ == "__main__":
 
     playwright = None
     browser = None
+    context = None
 
     try:
 
@@ -70,6 +63,7 @@ if __name__ == "__main__":
 
         page = context.new_page()
 
+        print("Browser page created.")
         print("Opening MyJobMag...")
 
         response = page.goto(
@@ -89,8 +83,8 @@ if __name__ == "__main__":
             f"Title: {page.title()}"
         )
 
-        # Give the browser a few seconds so
-        # we can visually confirm it works.
+        # Keep browser open briefly so we can
+        # visually confirm that Chromium works.
         page.wait_for_timeout(3000)
 
     except Exception as error:
@@ -107,3 +101,4 @@ if __name__ == "__main__":
                 playwright,
                 browser
             )
+
