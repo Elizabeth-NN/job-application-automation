@@ -22,14 +22,12 @@ It does NOT:
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Dict, List, Optional
 from urllib.parse import urljoin
 
-from scripts.browser.browser import (
-    launch_browser,
-    close_browser,
-)
+from scripts.browser.browser import launch_browser, close_browser
 
 
 # ============================================================
@@ -48,13 +46,16 @@ HEADLESS = False
 
 PAGE_TIMEOUT = 60000
 
+DETAIL_WAIT = 1200
+
+LISTING_WAIT = 1500
+
 
 # ============================================================
 # TECHNOLOGY FILTERS
 # ============================================================
 
 TECH_TITLE_PATTERNS = [
-
     # Software development
     r"\bsoftware\s+developer\b",
     r"\bsoftware\s+engineer\b",
@@ -87,6 +88,7 @@ TECH_TITLE_PATTERNS = [
     r"\breact\s+developer\b",
     r"\bgolang\s+developer\b",
     r"\bgo\s+developer\b",
+    r"\bruby\s+developer\b",
 
     # Applications / systems
     r"\bapplication\s+developer\b",
@@ -135,6 +137,7 @@ TECH_TITLE_PATTERNS = [
     r"\bict\s+developer\b",
     r"\bit\s+developer\b",
     r"\bsoftware\s+officer\b",
+    r"\bapplications?\s+&\s+software\b",
 
     # Security
     r"\bsecurity\s+analyst\b",
@@ -144,14 +147,15 @@ TECH_TITLE_PATTERNS = [
 
 
 EXCLUDED_TITLE_PATTERNS = [
-
     # Sales
     r"\bsales\s+representative\b",
     r"\bsales\s+executive\b",
     r"\bsales\s+agent\b",
     r"\bsales\s+consultant\b",
     r"\bsales\s+manager\b",
+    r"\bsales\s+engineer\b",
     r"\bfield\s+sales\b",
+    r"\btechnical\s+sales\b",
     r"\bsales\s+and\s+marketing\b",
 
     # Business development
@@ -207,6 +211,17 @@ EXCLUDED_TITLE_PATTERNS = [
     r"\btechnical\s+operator\b",
     r"\bhousekeeper\b",
     r"\blogistics\b",
+
+    # IT support / management
+    r"\bict\s+manager\b",
+    r"\bit\s+manager\b",
+    r"\binformation\s+systems\s+security\s+manager\b",
+    r"\bit\s+maintenance\b",
+    r"\bmaintenance\s+assistant\b",
+    r"\btechnical\s+support\b",
+    r"\bit\s+support\b",
+    r"\bhelp\s+desk\b",
+    r"\bsupport\s+officer\b",
 ]
 
 
@@ -216,34 +231,33 @@ EXCLUDED_TITLE_PATTERNS = [
 
 def clean_text(value: Optional[str]) -> str:
     """Normalize whitespace."""
-
     if not value:
         return ""
 
-    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s+", " ", str(value))
 
     return value.strip()
 
 
 def normalize_url(url: str) -> str:
-    """Convert a relative URL into an absolute URL."""
-
+    """Convert relative URL to absolute URL."""
     if not url:
         return ""
 
-    return urljoin(BASE_URL, url)
+    return urljoin(BASE_URL, url.strip())
 
 
 def matches_pattern(
     text: str,
     patterns: List[str],
 ) -> bool:
-    """Return True if text matches any supplied regex."""
+    """Return True when text matches any pattern."""
+    text = clean_text(text)
 
-    text = text.lower()
+    if not text:
+        return False
 
     for pattern in patterns:
-
         if re.search(
             pattern,
             text,
@@ -256,12 +270,10 @@ def matches_pattern(
 
 def is_technology_job(title: str) -> bool:
     """
-    Determine whether a job belongs to the
-    technology-oriented search.
+    Determine whether a title belongs to the technology category.
 
-    Explicit exclusions take priority.
+    Exclusions always take priority over inclusions.
     """
-
     title = clean_text(title)
 
     if not title:
@@ -280,21 +292,16 @@ def is_technology_job(title: str) -> bool:
 
 
 # ============================================================
-# PAGE NAVIGATION
+# PAGE HELPERS
 # ============================================================
 
 def get_page(context):
     """Create a new Playwright page."""
-
     return context.new_page()
 
 
-def navigate(
-    page,
-    url: str,
-):
-    """Navigate to a URL and return the response."""
-
+def navigate(page, url: str):
+    """Navigate to URL and return Playwright response."""
     print("Navigation started.")
 
     response = page.goto(
@@ -304,12 +311,44 @@ def navigate(
     )
 
     if response:
-
         print(
             f"Status: {response.status}"
         )
 
+        if response.status == 404:
+            print(
+                "Page does not exist (404)."
+            )
+
     return response
+
+
+def get_body_text(page) -> str:
+    """Return complete visible body text."""
+    try:
+        return clean_text(
+            page.locator("body").inner_text()
+        )
+    except Exception:
+        return ""
+
+
+def get_body_lines(page) -> List[str]:
+    """Return cleaned non-empty body lines."""
+    try:
+        text = page.locator("body").inner_text()
+    except Exception:
+        return []
+
+    lines = []
+
+    for line in text.splitlines():
+        line = clean_text(line)
+
+        if line:
+            lines.append(line)
+
+    return lines
 
 
 # ============================================================
@@ -319,10 +358,8 @@ def navigate(
 def build_listing_url(
     page_number: int,
 ) -> str:
-    """Build a paginated Software & Data URL."""
-
-    if page_number == 1:
-
+    """Build paginated Software & Data URL."""
+    if page_number <= 1:
         return SOFTWARE_DATA_URL
 
     return (
@@ -331,11 +368,9 @@ def build_listing_url(
     )
 
 
-def collect_listing_links(
-    page,
-) -> List[Dict[str, str]]:
+def collect_listing_links(page) -> List[Dict[str, str]]:
     """
-    Extract job links from the current listing page.
+    Extract job links from the current page.
 
     Returns:
         [
@@ -345,7 +380,6 @@ def collect_listing_links(
             }
         ]
     """
-
     print()
     print("Collecting job links...")
     print()
@@ -354,14 +388,15 @@ def collect_listing_links(
 
     seen = set()
 
-    links = page.locator(
-        'a[href*="/listings/"]'
-    ).all()
+    try:
+        links = page.locator(
+            'a[href*="/listings/"]'
+        ).all()
+    except Exception:
+        return results
 
     for link in links:
-
         try:
-
             href = link.get_attribute(
                 "href"
             )
@@ -369,9 +404,7 @@ def collect_listing_links(
             if not href:
                 continue
 
-            url = normalize_url(
-                href
-            )
+            url = normalize_url(href)
 
             if "/listings/" not in url:
                 continue
@@ -381,14 +414,19 @@ def collect_listing_links(
             )
 
             if not title:
-
                 title = clean_text(
-                    link.get_attribute(
-                        "title"
-                    )
+                    link.get_attribute("title")
                 )
 
             if not title:
+                continue
+
+            if title.lower() in {
+                "view job",
+                "apply now",
+                "read more",
+                "see more",
+            }:
                 continue
 
             if url in seen:
@@ -410,7 +448,7 @@ def collect_listing_links(
 
 
 # ============================================================
-# PAGINATED COLLECTION
+# PAGINATION
 # ============================================================
 
 def collect_job_links(
@@ -418,13 +456,13 @@ def collect_job_links(
     max_pages: int = MAX_PAGES,
 ) -> List[Dict[str, str]]:
     """
-    Collect unique technology jobs from
-    BrighterMonday Software & Data listings.
+    Collect unique technology-related jobs.
     """
-
     print()
     print("=" * 60)
-    print("BRIGHTERMONDAY SOFTWARE & DATA COLLECTION")
+    print(
+        "BRIGHTERMONDAY SOFTWARE & DATA COLLECTION"
+    )
     print("=" * 60)
 
     all_jobs = []
@@ -435,7 +473,6 @@ def collect_job_links(
         1,
         max_pages + 1,
     ):
-
         listing_url = build_listing_url(
             page_number
         )
@@ -445,37 +482,29 @@ def collect_job_links(
             f"Listing page "
             f"{page_number}/{max_pages}"
         )
-
         print(
             f"URL: {listing_url}"
         )
 
-        page = get_page(
-            context
-        )
+        page = get_page(context)
 
         try:
-
             response = navigate(
                 page,
                 listing_url,
             )
 
-            # Stop when the requested page does not exist.
-            if response and response.status == 404:
-
-                print(
-                    "Page does not exist (404)."
-                )
-
+            if (
+                response
+                and response.status == 404
+            ):
                 print(
                     "Stopping pagination."
                 )
-
                 break
 
             page.wait_for_timeout(
-                1500
+                LISTING_WAIT
             )
 
             jobs = collect_listing_links(
@@ -491,7 +520,6 @@ def collect_job_links(
             filtered_jobs = 0
 
             for job in jobs:
-
                 url = job["url"]
                 title = job["title"]
 
@@ -503,14 +531,10 @@ def collect_job_links(
                 if not is_technology_job(
                     title
                 ):
-
                     filtered_jobs += 1
-
                     continue
 
-                all_jobs.append(
-                    job
-                )
+                all_jobs.append(job)
 
                 new_jobs += 1
 
@@ -530,19 +554,22 @@ def collect_job_links(
             )
 
         except Exception as error:
-
             print(
-                f"⚠ Failed to process page "
+                f"Failed to process page "
                 f"{page_number}: {error}"
             )
 
         finally:
-
-            page.close()
+            try:
+                page.close()
+            except Exception:
+                pass
 
     print()
     print("=" * 60)
-    print("SOFTWARE & DATA COLLECTION COMPLETE")
+    print(
+        "SOFTWARE & DATA COLLECTION COMPLETE"
+    )
     print("=" * 60)
 
     print(
@@ -554,171 +581,163 @@ def collect_job_links(
 
 
 # ============================================================
-# FIELD EXTRACTION HELPERS
+# JSON-LD
 # ============================================================
 
-def get_body_lines(page) -> List[str]:
+def get_json_ld_objects(page) -> List[dict]:
     """
-    Return cleaned visible body lines.
+    Extract JSON-LD objects from the page.
 
-    This is used as a fallback when BrighterMonday's
-    HTML structure changes.
+    BrighterMonday may expose job information
+    through structured JobPosting data. This is
+    generally more reliable than scraping visible
+    page text.
     """
+    objects = []
 
     try:
-
-        body_text = page.locator(
-            "body"
-        ).inner_text()
-
+        scripts = page.locator(
+            "script[type='application/ld+json']"
+        ).all()
     except Exception:
+        return objects
 
-        return []
+    for script in scripts:
+        try:
+            raw = script.inner_text()
 
-    lines = []
+            if not raw:
+                continue
 
-    for line in body_text.splitlines():
+            raw = raw.strip()
 
-        line = clean_text(line)
+            if not raw:
+                continue
 
-        if line:
-            lines.append(line)
+            data = json.loads(raw)
 
-    return lines
+        except Exception:
+            continue
 
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    objects.append(item)
 
-def find_labeled_value(
-    page,
-    labels: List[str],
-) -> str:
-    """
-    Extract a value associated with a visible label.
+        elif isinstance(data, dict):
+            objects.append(data)
 
-    Supports:
-
-        Location
-        Nairobi
-
-    and:
-
-        Location: Nairobi
-    """
-
-    lines = get_body_lines(page)
-
-    if not lines:
-        return ""
-
-    normalized_labels = {
-        clean_text(label).lower()
-        for label in labels
-    }
-
-    for index, line in enumerate(lines):
-
-        normalized_line = line.lower()
-
-        # ----------------------------------------------------
-        # Label and value on the same line
-        # ----------------------------------------------------
-
-        for label in normalized_labels:
-
-            if normalized_line.startswith(
-                label + ":"
-            ):
-
-                value = clean_text(
-                    line[
-                        len(label) + 1:
-                    ]
-                )
-
-                if value:
-                    return value
-
-        # ----------------------------------------------------
-        # Label and value on separate lines
-        # ----------------------------------------------------
-
-        if normalized_line in normalized_labels:
-
-            if index + 1 < len(lines):
-
-                value = clean_text(
-                    lines[index + 1]
-                )
-
-                if not value:
-                    continue
-
-                if (
-                    value.lower()
-                    not in normalized_labels
-                ):
-
-                    return value
-
-    return ""
-
-
-def find_value_by_text_patterns(
-    page,
-    patterns: List[str],
-) -> str:
-    """
-    Search visible page text for values using regex patterns.
-
-    This is especially useful for fields such as:
-
-        3 years
-        2 years
-        1 month
-        30 September 2026
-    """
-
-    try:
-
-        body_text = clean_text(
-            page.locator(
-                "body"
-            ).inner_text()
-        )
-
-    except Exception:
-
-        return ""
-
-    for pattern in patterns:
-
-        match = re.search(
-            pattern,
-            body_text,
-            flags=re.IGNORECASE,
-        )
-
-        if match:
-
-            if match.groups():
-
-                value = match.group(
-                    1
-                )
-
-            else:
-
-                value = match.group(
-                    0
-                )
-
-            value = clean_text(
-                value
+            graph = data.get(
+                "@graph"
             )
 
-            if value:
-                return value
+            if isinstance(graph, list):
+                for item in graph:
+                    if isinstance(item, dict):
+                        objects.append(item)
 
-    return ""
+    return objects
+
+
+def get_job_posting_json_ld(
+    page,
+) -> List[dict]:
+    """Return JobPosting JSON-LD objects."""
+    postings = []
+
+    for data in get_json_ld_objects(page):
+        schema_type = data.get(
+            "@type"
+        )
+
+        if isinstance(
+            schema_type,
+            list,
+        ):
+            if "JobPosting" in schema_type:
+                postings.append(data)
+
+        elif schema_type == "JobPosting":
+            postings.append(data)
+
+    return postings
+
+
+# ============================================================
+# GENERIC FIELD VALIDATION
+# ============================================================
+
+def is_placeholder(value: str) -> bool:
+    """Return True for obvious placeholder/UI values."""
+    if not value:
+        return True
+
+    value = clean_text(value).lower()
+
+    placeholders = {
+        "",
+        "not found",
+        "unknown",
+        "unknown company",
+        "job summary",
+        "job details",
+        "job description",
+        "job overview",
+        "overview",
+        "details",
+        "location",
+        "job location",
+        "where",
+        "company",
+        "employer",
+        "employers",
+        "qualification",
+        "education",
+        "experience",
+        "experience level",
+        "experience length",
+        "posted",
+        "date posted",
+        "deadline",
+        "application deadline",
+        "apply now",
+        "sign in",
+        "login",
+        "log in",
+        "sign up to apply",
+        "software & data",
+        "software and data",
+    }
+
+    return value in placeholders
+
+
+def valid_short_value(
+    value: str,
+    max_words: int = 15,
+) -> bool:
+    """
+    Validate a short field.
+
+    This prevents values such as:
+        "Job summary Department: Data..."
+    from being returned as a field.
+    """
+    value = clean_text(value)
+
+    if not value:
+        return False
+
+    if is_placeholder(value):
+        return False
+
+    if len(value) > 200:
+        return False
+
+    if len(value.split()) > max_words:
+        return False
+
+    return True
 
 
 # ============================================================
@@ -729,117 +748,195 @@ def extract_title(
     page,
     fallback: str = "",
 ) -> str:
-    """Extract the actual job title."""
-
+    """Extract actual job title."""
     try:
-
         headings = page.locator(
             "h1"
         ).all()
 
         for heading in headings:
-
             text = clean_text(
                 heading.inner_text()
             )
 
-            if text:
+            if not text:
+                continue
 
-                text = re.sub(
-                    r"\s+at\s+.+$",
-                    "",
-                    text,
-                    flags=re.IGNORECASE,
-                )
+            text = re.sub(
+                r"\s+at\s+.+$",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            )
 
-                return clean_text(
-                    text
-                )
+            if valid_short_value(
+                text,
+                max_words=25,
+            ):
+                return text
 
     except Exception:
         pass
 
-    return clean_text(
-        fallback
-    )
+    # JSON-LD fallback
+    for data in get_job_posting_json_ld(page):
+        value = data.get(
+            "title",
+            "",
+        )
+
+        if isinstance(value, str):
+            value = clean_text(value)
+
+            if value:
+                return value
+
+    return clean_text(fallback)
 
 
 # ============================================================
 # COMPANY
 # ============================================================
 
-def extract_company(
-    page,
-) -> str:
+def extract_company(page) -> str:
     """
-    Extract company name.
+    Extract employer/company.
 
-    Several strategies are used because BrighterMonday
-    page structures can vary.
+    Priority:
+        1. JSON-LD hiringOrganization
+        2. Company links
+        3. Explicit company selectors
+        4. Page title
+        5. Label/value
     """
+
+    # --------------------------------------------------------
+    # 1. JSON-LD
+    # --------------------------------------------------------
+
+    for data in get_job_posting_json_ld(page):
+        organization = data.get(
+            "hiringOrganization"
+        )
+
+        if isinstance(
+            organization,
+            dict,
+        ):
+            name = clean_text(
+                organization.get(
+                    "name",
+                    "",
+                )
+            )
+
+            if valid_company(name):
+                return name
+
+        elif isinstance(
+            organization,
+            str,
+        ):
+            name = clean_text(
+                organization
+            )
+
+            if valid_company(name):
+                return name
+
+    # --------------------------------------------------------
+    # 2. Company links
+    # --------------------------------------------------------
 
     selectors = [
-
         'a[href*="/companies/"]',
-
-        '[class*="company"] a',
-
-        '[class*="company-name"]',
-
-        '[data-testid*="company"]',
+        'a[href*="/company/"]',
+        'a[href*="/employers/"]',
+        'a[href*="/employer/"]',
     ]
 
     for selector in selectors:
-
         try:
-
             elements = page.locator(
                 selector
             ).all()
 
             for element in elements:
-
-                text = clean_text(
+                value = clean_text(
                     element.inner_text()
                 )
 
-                if (
-                    text
-                    and len(text) > 1
-                    and len(text) < 150
-                ):
-
-                    return text
+                if valid_company(value):
+                    return value
 
         except Exception:
             continue
 
-    # Page title fallback.
-    try:
+    # --------------------------------------------------------
+    # 3. Explicit selectors
+    # --------------------------------------------------------
 
+    selectors = [
+        "[data-testid*='company']",
+        "[data-testid*='employer']",
+        "[data-test*='company']",
+        "[data-test*='employer']",
+        "[class*='company-name']",
+        "[class*='company_name']",
+        "[class*='companyName']",
+        "[class*='employer-name']",
+        "[class*='employer_name']",
+        "[class*='employerName']",
+    ]
+
+    for selector in selectors:
+        try:
+            elements = page.locator(
+                selector
+            ).all()
+
+            for element in elements:
+                value = clean_text(
+                    element.inner_text()
+                )
+
+                if valid_company(value):
+                    return value
+
+        except Exception:
+            continue
+
+    # --------------------------------------------------------
+    # 4. Page title
+    # --------------------------------------------------------
+
+    try:
         page_title = clean_text(
             page.title()
         )
 
         match = re.search(
-            r"^(.+?)\s+at\s+(.+?)(?:\s+\||$)",
+            r"^(.*?)\s+at\s+(.+?)(?:\s*\|\s*BrighterMonday)?$",
             page_title,
             flags=re.IGNORECASE,
         )
 
         if match:
-
             company = clean_text(
                 match.group(2)
             )
 
-            if company:
+            if valid_company(company):
                 return company
 
     except Exception:
         pass
 
-    return find_labeled_value(
+    # --------------------------------------------------------
+    # 5. Label/value
+    # --------------------------------------------------------
+
+    value = find_structured_label_value(
         page,
         [
             "Company",
@@ -849,72 +946,839 @@ def extract_company(
         ],
     )
 
+    if valid_company(value):
+        return value
+
+    return "Unknown Company"
+
+
+def valid_company(
+    value: str,
+) -> bool:
+    """Validate employer name."""
+    value = clean_text(value)
+
+    if not value:
+        return False
+
+    lower = value.lower()
+
+    invalid = {
+        "company",
+        "companies",
+        "employer",
+        "employers",
+        "unknown",
+        "unknown company",
+        "unknown employer",
+        "brightermonday",
+        "brighter monday",
+        "job summary",
+        "job details",
+        "job description",
+        "job overview",
+        "overview",
+        "details",
+        "software & data",
+        "software and data",
+        "apply now",
+        "login",
+        "log in",
+        "sign in",
+        "nairobi",
+        "mombasa",
+        "kisumu",
+        "nakuru",
+        "eldoret",
+        "thika",
+        "kenya",
+    }
+
+    if lower in invalid:
+        return False
+
+    if "email address" in lower:
+        return False
+
+    if "protection of your data" in lower:
+        return False
+
+    if "apply now" in lower:
+        return False
+
+    if "sign up" in lower:
+        return False
+
+    if "log in" in lower:
+        return False
+
+    if "http://" in lower:
+        return False
+
+    if "https://" in lower:
+        return False
+
+    if "@" in value:
+        return False
+
+    if len(value) > 150:
+        return False
+
+    if len(value.split()) > 12:
+        return False
+
+    return True
+
+
+# ============================================================
+# STRUCTURED LABEL EXTRACTION
+# ============================================================
+
+def find_structured_label_value(
+    page,
+    labels: List[str],
+) -> str:
+    """
+    Extract a label/value pair without treating the
+    entire flattened body as a valid field.
+
+    Handles:
+
+        Location
+        Nairobi
+
+    and:
+
+        Location: Nairobi
+
+    and:
+
+        Location - Nairobi
+    """
+
+    normalized_labels = {
+        clean_text(label).lower()
+        for label in labels
+    }
+
+    # --------------------------------------------------------
+    # 1. DOM elements containing exact label
+    # --------------------------------------------------------
+
+    for label in normalized_labels:
+
+        # Exact text node
+        selector = (
+            f"text={label}"
+        )
+
+        try:
+            locator = page.get_by_text(
+                label,
+                exact=True,
+            )
+
+            count = locator.count()
+
+            for index in range(count):
+                element = locator.nth(index)
+
+                # Parent's next sibling
+                try:
+                    sibling = element.locator(
+                        ".."
+                    ).locator(
+                        "xpath=following-sibling::*[1]"
+                    )
+
+                    if sibling.count() > 0:
+                        value = clean_text(
+                            sibling.first.inner_text()
+                        )
+
+                        if valid_short_value(
+                            value
+                        ):
+                            return value
+                except Exception:
+                    pass
+
+                # Parent contents
+                try:
+                    parent = element.locator(
+                        ".."
+                    )
+
+                    text = clean_text(
+                        parent.inner_text()
+                    )
+
+                    value = extract_value_from_inline_label(
+                        text,
+                        label,
+                    )
+
+                    if valid_short_value(
+                        value
+                    ):
+                        return value
+
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # 2. Body lines
+    # --------------------------------------------------------
+
+    lines = get_body_lines(page)
+
+    for index, line in enumerate(lines):
+        lower_line = line.lower()
+
+        for label in normalized_labels:
+
+            # Label: Value
+            match = re.match(
+                rf"^{re.escape(label)}\s*:\s*(.+)$",
+                lower_line,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+                value = clean_text(
+                    line[
+                        len(line)
+                        - len(match.group(1))
+                    :]
+                )
+
+                if valid_short_value(value):
+                    return value
+
+            # Label - Value
+            match = re.match(
+                rf"^{re.escape(label)}\s*[-–—]\s*(.+)$",
+                lower_line,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+                value = re.sub(
+                    rf"^{re.escape(label)}\s*[-–—]\s*",
+                    "",
+                    line,
+                    flags=re.IGNORECASE,
+                )
+
+                value = clean_text(value)
+
+                if valid_short_value(value):
+                    return value
+
+            # Label on one line, value on next
+            if lower_line == label:
+                if index + 1 < len(lines):
+                    value = clean_text(
+                        lines[index + 1]
+                    )
+
+                    if (
+                        valid_short_value(value)
+                        and value.lower()
+                        not in normalized_labels
+                    ):
+                        return value
+
+    return ""
+
+
+def extract_value_from_inline_label(
+    text: str,
+    label: str,
+) -> str:
+    """
+    Extract a value from:
+        Label: Value
+
+    when multiple labels exist in the same text.
+    """
+
+    text = clean_text(text)
+
+    if not text:
+        return ""
+
+    labels = [
+        "Min Qualification",
+        "Minimum Qualification",
+        "Experience Level",
+        "Experience Length",
+        "Language Requirement",
+        "Working Hours",
+        "Applicant Location",
+        "Location",
+        "Job Type",
+        "Posted",
+        "Date Posted",
+        "Deadline",
+        "Application Deadline",
+        "Closing Date",
+    ]
+
+    escaped_labels = [
+        re.escape(item)
+        for item in labels
+    ]
+
+    next_labels = "|".join(
+        escaped_labels
+    )
+
+    pattern = (
+        rf"{re.escape(label)}"
+        rf"\s*:\s*"
+        rf"(.*?)"
+        rf"(?=\s+(?:{next_labels})\s*:|$)"
+    )
+
+    match = re.search(
+        pattern,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return ""
+
+    return clean_text(
+        match.group(1)
+    )
+
+
+# ============================================================
+# JOB SUMMARY
+# ============================================================
+
+JOB_SUMMARY_LABELS = [
+    "Min Qualification",
+    "Minimum Qualification",
+    "Experience Level",
+    "Experience Length",
+    "Language Requirement",
+    "Working Hours",
+    "Applicant Location",
+]
+
+
+def extract_job_summary_fields(
+    page,
+) -> Dict[str, str]:
+    """
+    Extract BrighterMonday's inline Job summary.
+
+    Example:
+
+        Min Qualification: Bachelors
+        Experience Level: Mid level
+        Experience Length: 3 years
+        Language Requirement: English
+        Working Hours: Full Time - 8 to 5
+        Applicant Location: Kenya
+    """
+
+    body = get_body_text(page)
+
+    if not body:
+        return {}
+
+    labels = [
+        "Min Qualification",
+        "Minimum Qualification",
+        "Experience Level",
+        "Experience Length",
+        "Language Requirement",
+        "Working Hours",
+        "Applicant Location",
+    ]
+
+    escaped = [
+        re.escape(label)
+        for label in labels
+    ]
+
+    label_pattern = "|".join(
+        escaped
+    )
+
+    matches = list(
+        re.finditer(
+            rf"({label_pattern})\s*:",
+            body,
+            flags=re.IGNORECASE,
+        )
+    )
+
+    fields = {}
+
+    for index, match in enumerate(matches):
+
+        label = clean_text(
+            match.group(1)
+        ).lower()
+
+        start = match.end()
+
+        if index + 1 < len(matches):
+            end = matches[
+                index + 1
+            ].start()
+        else:
+            end = len(body)
+
+        value = clean_text(
+            body[start:end]
+        )
+
+        # Stop obvious page chrome.
+        value = re.split(
+            r"\b(?:Report Job|Log in to apply now|Continue with Google|"
+            r"Continue with Linkedin|Share link|Activate Notifications)\b",
+            value,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+
+        value = clean_text(value)
+
+        if valid_short_value(
+            value,
+            max_words=20,
+        ):
+            fields[label] = value
+
+    return fields
+
 
 # ============================================================
 # LOCATION
 # ============================================================
 
+def normalize_location(
+    value: str,
+) -> str:
+    """Clean location value."""
+    value = clean_text(value)
+
+    if not value:
+        return ""
+
+    # Remove common country code suffix.
+    value = re.sub(
+        r",\s*KE\b",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    value = re.sub(
+        r"\bKE\b$",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    value = clean_text(value)
+
+    # Reject page fragments.
+    if len(value) > 100:
+        return ""
+
+    if "job summary" in value.lower():
+        return ""
+
+    if "job descriptions" in value.lower():
+        return ""
+
+    if "requirements" in value.lower():
+        return ""
+
+    return value
+
+
 def extract_location(
     page,
 ) -> str:
+    """
+    Extract job location.
 
-    value = find_labeled_value(
+    Priority:
+        1. JSON-LD jobLocation
+        2. Dedicated location selectors
+        3. Header/meta data
+        4. Structured label
+        5. Safe location detection
+    """
+
+    # --------------------------------------------------------
+    # 1. JSON-LD
+    # --------------------------------------------------------
+
+    for data in get_job_posting_json_ld(page):
+
+        location_data = data.get(
+            "jobLocation"
+        )
+
+        if isinstance(
+            location_data,
+            dict,
+        ):
+            location_data = [
+                location_data
+            ]
+
+        if not isinstance(
+            location_data,
+            list,
+        ):
+            continue
+
+        for item in location_data:
+
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            address = item.get(
+                "address"
+            )
+
+            if not isinstance(
+                address,
+                dict,
+            ):
+                continue
+
+            locality = clean_text(
+                address.get(
+                    "addressLocality",
+                    "",
+                )
+            )
+
+            region = clean_text(
+                address.get(
+                    "addressRegion",
+                    "",
+                )
+            )
+
+            country = clean_text(
+                address.get(
+                    "addressCountry",
+                    "",
+                )
+            )
+
+            if country.lower() in {
+                "ke",
+                "kenya",
+            }:
+                country = "Kenya"
+
+            parts = []
+
+            for part in (
+                locality,
+                region,
+                country,
+            ):
+                if (
+                    part
+                    and part not in parts
+                ):
+                    parts.append(part)
+
+            value = normalize_location(
+                ", ".join(parts)
+            )
+
+            if value:
+                return value
+
+    # --------------------------------------------------------
+    # 2. Dedicated selectors
+    # --------------------------------------------------------
+
+    selectors = [
+        "[data-testid*='location']",
+        "[data-test*='location']",
+        "[class*='location']",
+        "[class*='job-location']",
+        "[class*='job_location']",
+        "[class*='location-name']",
+        "[class*='location_name']",
+    ]
+
+    candidates = []
+
+    for selector in selectors:
+        try:
+            elements = page.locator(
+                selector
+            ).all()
+
+            for element in elements:
+                text = clean_text(
+                    element.inner_text()
+                )
+
+                if not text:
+                    continue
+
+                if not valid_short_value(
+                    text,
+                    max_words=10,
+                ):
+                    continue
+
+                location = normalize_location(
+                    text
+                )
+
+                if location:
+                    candidates.append(
+                        location
+                    )
+
+        except Exception:
+            continue
+
+    # Prefer actual Kenyan locations.
+    preferred_locations = [
+        "Nairobi",
+        "Mombasa",
+        "Kisumu",
+        "Nakuru",
+        "Eldoret",
+        "Thika",
+        "Kiambu",
+        "Machakos",
+        "Kenya",
+        "Remote",
+    ]
+
+    for candidate in candidates:
+        for preferred in preferred_locations:
+            if candidate.lower() == preferred.lower():
+                return candidate
+
+    if candidates:
+        return candidates[0]
+
+    # --------------------------------------------------------
+    # 3. Structured label
+    # --------------------------------------------------------
+
+    value = find_structured_label_value(
         page,
         [
-            "Location",
             "Job Location",
+            "Location",
             "Where",
         ],
+    )
+
+    value = normalize_location(
+        value
     )
 
     if value:
         return value
 
-    # Common location values.
-    return find_value_by_text_patterns(
-        page,
-        [
-            r"\b(Nairobi)\b",
-            r"\b(Mombasa)\b",
-            r"\b(Kisumu)\b",
-            r"\b(Nakuru)\b",
-            r"\b(Kenya)\b",
-            r"\b(Remote)\b",
-        ],
-    )
+    # --------------------------------------------------------
+    # 4. Search safe body lines
+    # --------------------------------------------------------
+
+    lines = get_body_lines(page)
+
+    for line in lines:
+
+        value = clean_text(line)
+
+        if not value:
+            continue
+
+        # Exact common locations.
+        if value.lower() in {
+            "nairobi",
+            "mombasa",
+            "kisumu",
+            "nakuru",
+            "eldoret",
+            "thika",
+            "kiambu",
+            "machakos",
+            "kenya",
+            "remote",
+        }:
+            return value
+
+        # "Nairobi, Kenya"
+        if re.fullmatch(
+            r"(Nairobi|Mombasa|Kisumu|Nakuru|Eldoret|Thika|Kiambu|Machakos)"
+            r"(?:,\s*Kenya)?",
+            value,
+            flags=re.IGNORECASE,
+        ):
+            return value
+
+    return ""
 
 
 # ============================================================
 # JOB TYPE
 # ============================================================
 
+def normalize_job_type(
+    value: str,
+) -> str:
+    """Normalize employment type."""
+    value = clean_text(value)
+
+    if not value:
+        return ""
+
+    replacements = {
+        "FULL_TIME": "Full Time",
+        "PART_TIME": "Part Time",
+        "CONTRACTOR": "Contract",
+        "CONTRACT": "Contract",
+        "TEMPORARY": "Temporary",
+        "INTERN": "Internship",
+        "VOLUNTEER": "Volunteer",
+        "PER_DIEM": "Per Diem",
+        "OTHER": "Other",
+    }
+
+    values = [
+        clean_text(item)
+        for item in value.split(",")
+        if clean_text(item)
+    ]
+
+    normalized = []
+
+    for item in values:
+        key = item.upper()
+
+        normalized_value = replacements.get(
+            key,
+            item.replace(
+                "_",
+                " ",
+            ).title(),
+        )
+
+        if normalized_value not in normalized:
+            normalized.append(
+                normalized_value
+            )
+
+    return ", ".join(normalized)
+
+
 def extract_job_type(
     page,
 ) -> str:
+    """Extract employment type."""
 
-    value = find_labeled_value(
+    # --------------------------------------------------------
+    # JSON-LD
+    # --------------------------------------------------------
+
+    for data in get_job_posting_json_ld(page):
+
+        value = data.get(
+            "employmentType"
+        )
+
+        if isinstance(
+            value,
+            list,
+        ):
+            value = ", ".join(
+                clean_text(item)
+                for item in value
+                if clean_text(item)
+            )
+
+        if isinstance(
+            value,
+            str,
+        ) and value.strip():
+
+            result = normalize_job_type(
+                value
+            )
+
+            if result:
+                return result
+
+    # --------------------------------------------------------
+    # Visible structured field
+    # --------------------------------------------------------
+
+    value = find_structured_label_value(
         page,
         [
             "Job Type",
             "Employment Type",
-            "Job type",
+            "Employment",
         ],
+    )
+
+    value = normalize_job_type(
+        value
     )
 
     if value:
         return value
 
-    return find_value_by_text_patterns(
-        page,
-        [
-            r"\b(Full Time)\b",
-            r"\b(Part Time)\b",
-            r"\b(Contract)\b",
-            r"\b(Internship)\b",
-            r"\b(Internship, Volunteer)\b",
-            r"\b(Temporary)\b",
-        ],
+    # --------------------------------------------------------
+    # Job summary
+    # --------------------------------------------------------
+
+    summary = extract_job_summary_fields(
+        page
     )
+
+    # Working hours often contains the actual
+    # employment schedule, but not always the job type.
+    working_hours = summary.get(
+        "working hours",
+        "",
+    )
+
+    if working_hours:
+        if "full time" in working_hours.lower():
+            return "Full Time"
+
+        if "part time" in working_hours.lower():
+            return "Part Time"
+
+        if "intern" in working_hours.lower():
+            return "Internship"
+
+        if "contract" in working_hours.lower():
+            return "Contract"
+
+    return ""
 
 
 # ============================================================
@@ -924,30 +1788,157 @@ def extract_job_type(
 def extract_qualification(
     page,
 ) -> str:
+    """Extract minimum qualification."""
 
-    value = find_labeled_value(
+    # --------------------------------------------------------
+    # JSON-LD
+    # --------------------------------------------------------
+
+    for data in get_job_posting_json_ld(page):
+
+        education = data.get(
+            "educationRequirements"
+        )
+
+        if isinstance(
+            education,
+            dict,
+        ):
+
+            for key in (
+                "credentialCategory",
+                "name",
+                "description",
+                "text",
+            ):
+
+                value = education.get(
+                    key,
+                    "",
+                )
+
+                if isinstance(
+                    value,
+                    str,
+                ):
+
+                    value = clean_text(
+                        value
+                    )
+
+                    if valid_short_value(
+                        value,
+                        max_words=20,
+                    ):
+                        return value
+
+        elif isinstance(
+            education,
+            list,
+        ):
+
+            values = []
+
+            for item in education:
+
+                if isinstance(
+                    item,
+                    dict,
+                ):
+
+                    for key in (
+                        "credentialCategory",
+                        "name",
+                        "description",
+                        "text",
+                    ):
+
+                        value = item.get(
+                            key,
+                            "",
+                        )
+
+                        if isinstance(
+                            value,
+                            str,
+                        ):
+
+                            value = clean_text(
+                                value
+                            )
+
+                            if value:
+                                values.append(
+                                    value
+                                )
+
+                            break
+
+                elif isinstance(
+                    item,
+                    str,
+                ):
+                    value = clean_text(
+                        item
+                    )
+
+                    if value:
+                        values.append(
+                            value
+                        )
+
+            if values:
+                return ", ".join(
+                    dict.fromkeys(values)
+                )
+
+    # --------------------------------------------------------
+    # Visible field
+    # --------------------------------------------------------
+
+    value = find_structured_label_value(
         page,
         [
-            "Qualification",
-            "Education",
             "Minimum Qualification",
+            "Minimum Education",
+            "Qualification",
+            "Qualifications",
+            "Education",
         ],
     )
 
-    if value:
+    if valid_short_value(
+        value,
+        max_words=20,
+    ):
         return value
 
-    return find_value_by_text_patterns(
-        page,
-        [
-            r"\b(Bachelors)\b",
-            r"\b(Bachelor's)\b",
-            r"\b(Diploma)\b",
-            r"\b(Masters)\b",
-            r"\b(Master's)\b",
-            r"\b(PhD)\b",
-        ],
+    # --------------------------------------------------------
+    # Job summary
+    # --------------------------------------------------------
+
+    summary = extract_job_summary_fields(
+        page
     )
+
+    value = summary.get(
+        "min qualification",
+        "",
+    )
+
+    if not value:
+        value = summary.get(
+            "minimum qualification",
+            "",
+        )
+
+    if valid_short_value(
+        value,
+        max_words=20,
+    ):
+        return value
+
+    return ""
 
 
 # ============================================================
@@ -958,40 +1949,78 @@ def extract_experience_level(
     page,
 ) -> str:
     """
-    Extract BrighterMonday experience level.
+    Extract career/experience level.
 
     Examples:
         Entry level
         Mid level
         Senior level
-        Executive level
         Internship & Graduate
     """
 
-    value = find_labeled_value(
+    value = find_structured_label_value(
         page,
         [
             "Experience Level",
             "Career Level",
-            "Experience level",
         ],
     )
 
-    if value:
+    if valid_experience_level(
+        value
+    ):
         return value
 
-    return find_value_by_text_patterns(
-        page,
-        [
-            r"\b(Entry level)\b",
-            r"\b(Mid level)\b",
-            r"\b(Senior level)\b",
-            r"\b(Executive level)\b",
-            r"\b(Internship\s*&\s*Graduate)\b",
-            r"\b(Graduate)\b",
-            r"\b(Internship)\b",
-        ],
+    summary = extract_job_summary_fields(
+        page
     )
+
+    value = summary.get(
+        "experience level",
+        "",
+    )
+
+    if valid_experience_level(
+        value
+    ):
+        return value
+
+    return ""
+
+
+def valid_experience_level(
+    value: str,
+) -> bool:
+    """Validate experience level."""
+    value = clean_text(value)
+
+    if not value:
+        return False
+
+    lower = value.lower()
+
+    known_levels = [
+        "entry",
+        "junior",
+        "mid",
+        "senior",
+        "management",
+        "executive",
+        "intern",
+        "graduate",
+        "no experience",
+    ]
+
+    if not any(
+        term in lower
+        for term in known_levels
+    ):
+        return False
+
+    if len(value) > 80:
+        return False
+
+    return True
 
 
 # ============================================================
@@ -1002,62 +2031,280 @@ def extract_experience_length(
     page,
 ) -> str:
     """
-    Extract the required experience duration.
+    Extract required experience duration.
 
     Examples:
-        1 month
+        1 year
         2 years
         3 years
-        5 years
+        6 months
     """
 
-    value = find_labeled_value(
+    # --------------------------------------------------------
+    # JSON-LD
+    # --------------------------------------------------------
+
+    for data in get_job_posting_json_ld(page):
+
+        requirements = data.get(
+            "experienceRequirements"
+        )
+
+        if isinstance(
+            requirements,
+            dict,
+        ):
+
+            months = requirements.get(
+                "monthsOfExperience"
+            )
+
+            if months is not None:
+                try:
+                    months = int(
+                        months
+                    )
+
+                    result = format_experience_months(
+                        months
+                    )
+
+                    if result:
+                        return result
+
+                except (
+                    ValueError,
+                    TypeError,
+                ):
+                    pass
+
+            description = requirements.get(
+                "description",
+                "",
+            )
+
+            if isinstance(
+                description,
+                str,
+            ):
+                result = extract_duration(
+                    description
+                )
+
+                if result:
+                    return result
+
+        elif isinstance(
+            requirements,
+            str,
+        ):
+
+            result = extract_duration(
+                requirements
+            )
+
+            if result:
+                return result
+
+    # --------------------------------------------------------
+    # Structured field
+    # --------------------------------------------------------
+
+    value = find_structured_label_value(
         page,
         [
             "Experience Length",
             "Years of Experience",
+            "Years Experience",
+            "Experience Required",
+            "Required Experience",
         ],
     )
 
-    if value:
-        return value
+    result = extract_duration(
+        value
+    )
 
-    return find_value_by_text_patterns(
+    if result:
+        return result
+
+    # --------------------------------------------------------
+    # Generic Experience field
+    # --------------------------------------------------------
+
+    value = find_structured_label_value(
         page,
-        [
-            r"\b(\d+\+?\s+years?)\b",
-            r"\b(\d+\+?\s+months?)\b",
-            r"\b(\d+\+?\s+weeks?)\b",
-        ],
+        ["Experience"],
     )
+
+    result = extract_duration(
+        value
+    )
+
+    if result:
+        return result
+
+    # --------------------------------------------------------
+    # Job summary
+    # --------------------------------------------------------
+
+    summary = extract_job_summary_fields(
+        page
+    )
+
+    value = summary.get(
+        "experience length",
+        "",
+    )
+
+    result = extract_duration(
+        value
+    )
+
+    if result:
+        return result
+
+    return ""
+
+
+def extract_duration(
+    value: str,
+) -> str:
+    """Extract a concise experience duration."""
+    value = clean_text(value)
+
+    if not value:
+        return ""
+
+    # Examples:
+    # 3 years
+    # 3+ years
+    # 3 - 5 years
+    # 6 months
+    # 1 year and 6 months
+
+    pattern = (
+        r"\b"
+        r"\d+(?:\.\d+)?"
+        r"\s*(?:\+|[-–—]\s*\d+(?:\.\d+)?)?"
+        r"\s*"
+        r"(?:years?|months?)"
+        r"(?:\s+and\s+\d+\s+months?)?"
+        r"\b"
+    )
+
+    match = re.search(
+        pattern,
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return ""
+
+    return clean_text(
+        match.group(0)
+    )
+
+
+def format_experience_months(
+    months: int,
+) -> str:
+    """Convert months into years/months."""
+    if months <= 0:
+        return ""
+
+    years = months // 12
+
+    remaining = months % 12
+
+    parts = []
+
+    if years == 1:
+        parts.append("1 year")
+    elif years > 1:
+        parts.append(
+            f"{years} years"
+        )
+
+    if remaining == 1:
+        parts.append("1 month")
+    elif remaining > 1:
+        parts.append(
+            f"{remaining} months"
+        )
+
+    return " ".join(parts)
 
 
 # ============================================================
-# POSTED
+# POSTED DATE
 # ============================================================
 
 def extract_posted(
     page,
 ) -> str:
+    """Extract posted date."""
 
-    value = find_labeled_value(
+    # JSON-LD
+    for data in get_job_posting_json_ld(page):
+
+        value = data.get(
+            "datePosted"
+        )
+
+        if isinstance(
+            value,
+            str,
+        ):
+
+            value = clean_text(
+                value
+            )
+
+            if value:
+                return value
+
+    # Visible field
+    value = find_structured_label_value(
         page,
         [
             "Posted",
             "Date Posted",
+            "Posted Date",
         ],
     )
 
-    if value:
+    if valid_date_value(
+        value
+    ):
         return value
 
-    return find_value_by_text_patterns(
-        page,
-        [
-            r"\b(Posted\s+\d+\s+(?:day|days|week|weeks|month|months)\s+ago)\b",
-            r"\b(\d+\s+(?:day|days|week|weeks|month|months)\s+ago)\b",
-        ],
-    )
+    # Search common relative date patterns.
+    body = get_body_text(page)
+
+    patterns = [
+        r"\b\d+\s+day(?:s)?\s+ago\b",
+        r"\b\d+\s+week(?:s)?\s+ago\b",
+        r"\b\d+\s+month(?:s)?\s+ago\b",
+        r"\byesterday\b",
+        r"\btoday\b",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            body,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return clean_text(
+                match.group(0)
+            )
+
+    return ""
 
 
 # ============================================================
@@ -1067,55 +2314,74 @@ def extract_posted(
 def extract_deadline(
     page,
 ) -> str:
-    """
-    Extract the application deadline.
+    """Extract application deadline."""
 
-    First tries explicit labels, then searches for
-    common deadline/date formats.
-    """
+    # JSON-LD
+    for data in get_job_posting_json_ld(page):
 
-    value = find_labeled_value(
+        value = data.get(
+            "validThrough"
+        )
+
+        if isinstance(
+            value,
+            str,
+        ):
+
+            value = clean_text(
+                value
+            )
+
+            if value:
+                return value
+
+    # Visible field
+    value = find_structured_label_value(
         page,
         [
             "Deadline",
             "Application Deadline",
             "Closing Date",
-            "Closing date",
-            "Application closing date",
+            "Application Closing Date",
+            "Closing",
         ],
     )
 
-    if value:
+    if valid_date_value(
+        value
+    ):
         return value
 
-    # ISO date
-    value = find_value_by_text_patterns(
-        page,
-        [
-            r"\b(\d{4}-\d{2}-\d{2})\b",
-        ],
-    )
+    return ""
 
-    if value:
-        return value
 
-    # Dates such as:
-    # 30 September 2026
-    # September 30, 2026
-    # 30/09/2026
-    return find_value_by_text_patterns(
-        page,
-        [
-            r"\b(\d{1,2}\s+"
-            r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
-            r"\s+\d{4})\b",
+def valid_date_value(
+    value: str,
+) -> bool:
+    """Reject obvious page fragments."""
+    value = clean_text(value)
 
-            r"\b((?:January|February|March|April|May|June|July|August|September|October|November|December)"
-            r"\s+\d{1,2},?\s+\d{4})\b",
+    if not value:
+        return False
 
-            r"\b(\d{1,2}/\d{1,2}/\d{4})\b",
-        ],
-    )
+    lower = value.lower()
+
+    if "job summary" in lower:
+        return False
+
+    if "job description" in lower:
+        return False
+
+    if "log in" in lower:
+        return False
+
+    if "apply" in lower and len(value) > 40:
+        return False
+
+    if len(value) > 100:
+        return False
+
+    return True
 
 
 # ============================================================
@@ -1126,30 +2392,24 @@ def extract_description(
     page,
 ) -> str:
     """
-    Extract the job description.
+    Extract the main job description.
 
-    Several selectors are attempted.
+    The largest meaningful description block is preferred.
     """
 
-    selectors = [
-
-        '[class*="description"]',
-
-        '[class*="job-description"]',
-
-        '[data-testid*="description"]',
-
-        "article",
-
-        "main",
-    ]
-
     candidates = []
+
+    selectors = [
+        "[data-testid*='description']",
+        "[data-test*='description']",
+        "[class*='job-description']",
+        "[class*='job_description']",
+        "[class*='description']",
+    ]
 
     for selector in selectors:
 
         try:
-
             elements = page.locator(
                 selector
             ).all()
@@ -1160,8 +2420,7 @@ def extract_description(
                     element.inner_text()
                 )
 
-                if len(text) > 300:
-
+                if len(text) >= 300:
                     candidates.append(
                         text
                     )
@@ -1170,35 +2429,89 @@ def extract_description(
             continue
 
     if candidates:
-
         return max(
             candidates,
             key=len,
         )
 
-    try:
+    # --------------------------------------------------------
+    # Article fallback
+    # --------------------------------------------------------
 
-        return clean_text(
-            page.locator(
-                "body"
-            ).inner_text()
-        )
+    try:
+        articles = page.locator(
+            "article"
+        ).all()
+
+        for article in articles:
+
+            text = clean_text(
+                article.inner_text()
+            )
+
+            if len(text) >= 300:
+                candidates.append(
+                    text
+                )
 
     except Exception:
+        pass
 
-        return ""
+    if candidates:
+        return max(
+            candidates,
+            key=len,
+        )
+
+    # --------------------------------------------------------
+    # Main fallback
+    # --------------------------------------------------------
+
+    try:
+        mains = page.locator(
+            "main"
+        ).all()
+
+        for main in mains:
+
+            text = clean_text(
+                main.inner_text()
+            )
+
+            if len(text) >= 300:
+                candidates.append(
+                    text
+                )
+
+    except Exception:
+        pass
+
+    if candidates:
+        return max(
+            candidates,
+            key=len,
+        )
+
+    return get_body_text(page)
 
 
 # ============================================================
-# APPLICATION EXTRACTION
+# APPLICATION
 # ============================================================
 
 def extract_application(
     page,
 ) -> Dict[str, str]:
     """
-    Extract the BrighterMonday application method
-    and application URL.
+    Extract BrighterMonday application details.
+
+    Returns:
+        {
+            "method": "brightermonday",
+            "url": "...",
+            "email": "",
+            "subject": ""
+        }
     """
 
     application = {
@@ -1209,18 +2522,9 @@ def extract_application(
     }
 
     selectors = [
-
         'a[href*="/account/customer/sign-up"]',
-
         'a[href*="?apply="]',
-
         'a[href*="/job-application/"]',
-
-        'a:has-text("Apply")',
-
-        'a:has-text("Log In and Apply")',
-
-        'a:has-text("Sign Up to Apply")',
     ]
 
     seen = set()
@@ -1228,7 +2532,6 @@ def extract_application(
     for selector in selectors:
 
         try:
-
             links = page.locator(
                 selector
             ).all()
@@ -1246,18 +2549,19 @@ def extract_application(
                     href
                 )
 
+                if not url:
+                    continue
+
                 if url in seen:
                     continue
 
                 seen.add(url)
 
                 if (
-                    "sign-up?apply="
-                    in url
-                    or "?apply="
-                    in url
+                    "sign-up?apply=" in url
+                    or "?apply=" in url
+                    or "/job-application/" in url
                 ):
-
                     application["url"] = url
 
                     return application
@@ -1265,9 +2569,11 @@ def extract_application(
         except Exception:
             continue
 
-    # Fallback: inspect every link.
-    try:
+    # --------------------------------------------------------
+    # Fallback: apply links
+    # --------------------------------------------------------
 
+    try:
         links = page.locator(
             "a"
         ).all()
@@ -1278,12 +2584,12 @@ def extract_application(
                 "href"
             )
 
+            if not href:
+                continue
+
             text = clean_text(
                 link.inner_text()
             ).lower()
-
-            if not href:
-                continue
 
             url = normalize_url(
                 href
@@ -1315,13 +2621,13 @@ def inspect_job(
 ) -> Dict:
     """
     Open and inspect one BrighterMonday job.
-
-    Returns a normalized job dictionary.
     """
 
     print()
     print("=" * 60)
-    print("INSPECTING BRIGHTERMONDAY JOB")
+    print(
+        "INSPECTING BRIGHTERMONDAY JOB"
+    )
     print("=" * 60)
 
     print()
@@ -1329,27 +2635,16 @@ def inspect_job(
         f"URL: {job_url}"
     )
 
-    page = get_page(
-        context
-    )
+    page = get_page(context)
 
     try:
-
         response = navigate(
             page,
             job_url,
         )
 
-        if response and response.status == 404:
-
-            print(
-                "Job page returned 404."
-            )
-
-            return {}
-
         page.wait_for_timeout(
-            1000
+            DETAIL_WAIT
         )
 
         print(
@@ -1357,10 +2652,8 @@ def inspect_job(
         )
 
         if response:
-
             print(
-                f"Status: "
-                f"{response.status}"
+                f"Status: {response.status}"
             )
 
         # ----------------------------------------------------
@@ -1413,7 +2706,7 @@ def inspect_job(
         )
 
         # ----------------------------------------------------
-        # Build combined experience
+        # Combined experience
         # ----------------------------------------------------
 
         experience = ""
@@ -1422,77 +2715,64 @@ def inspect_job(
             experience_level
             and experience_length
         ):
-
             experience = (
                 f"{experience_level} "
                 f"({experience_length})"
             )
 
         elif experience_level:
-
             experience = experience_level
 
         elif experience_length:
-
             experience = experience_length
 
         # ----------------------------------------------------
-        # Normalized job
+        # Job dictionary
         # ----------------------------------------------------
 
         job = {
-
             "title": title,
-
             "company": company,
-
             "location": location,
-
             "job_type": job_type,
-
             "qualification": qualification,
-
             "experience_level": experience_level,
-
             "experience_length": experience_length,
-
             "experience": experience,
-
             "posted": posted,
-
             "deadline": deadline,
-
             "description": description,
-
             "url": job_url,
-
             "application": application,
-
             "application_method": application.get(
                 "method",
                 "",
             ),
-
             "application_url": application.get(
                 "url",
                 "",
             ),
-
             "application_email": application.get(
                 "email",
+                "",
+            ),
+            "application_subject": application.get(
+                "subject",
                 "",
             ),
         }
 
         # ----------------------------------------------------
-        # Display results
+        # Console output
         # ----------------------------------------------------
 
         print()
         print(
             "JOB INFORMATION"
         )
-        print("-" * 60)
+        print(
+            "-" * 60
+        )
 
         print(
             f"Title: "
@@ -1553,7 +2833,9 @@ def inspect_job(
         print(
             "APPLICATION METHOD"
         )
-        print("-" * 60)
+        print(
+            "-" * 60
+        )
 
         print(
             f"Method: "
@@ -1561,14 +2843,12 @@ def inspect_job(
         )
 
         if application.get("url"):
-
             print(
                 f"URL: "
                 f"{application['url']}"
             )
 
         if application.get("email"):
-
             print(
                 f"Email: "
                 f"{application['email']}"
@@ -1577,12 +2857,14 @@ def inspect_job(
         return job
 
     finally:
-
-        page.close()
+        try:
+            page.close()
+        except Exception:
+            pass
 
 
 # ============================================================
-# TEST
+# TEST / MAIN
 # ============================================================
 
 def main():
@@ -1591,26 +2873,28 @@ def main():
     """
 
     playwright = None
+
     browser = None
 
     try:
-
         # ----------------------------------------------------
-        # Start browser
+        # Launch browser
         # ----------------------------------------------------
 
-        playwright, browser, context = launch_browser(
-            headless=HEADLESS
+        playwright, browser, context = (
+            launch_browser(
+                headless=HEADLESS
+            )
         )
-
-        # ----------------------------------------------------
-        # Open BrighterMonday
-        # ----------------------------------------------------
 
         print()
         print(
             "Opening BrighterMonday..."
         )
+
+        # ----------------------------------------------------
+        # Open homepage
+        # ----------------------------------------------------
 
         page = get_page(
             context
@@ -1622,19 +2906,23 @@ def main():
         )
 
         if response:
-
             print(
-                f"Status: {response.status}"
+                f"Status: "
+                f"{response.status}"
             )
 
-        print(
-            f"Page title: {page.title()}"
-        )
+        try:
+            print(
+                f"Page title: "
+                f"{page.title()}"
+            )
+        except Exception:
+            pass
 
         page.close()
 
         # ----------------------------------------------------
-        # Collect jobs
+        # Collect technology jobs
         # ----------------------------------------------------
 
         jobs = collect_job_links(
@@ -1649,7 +2937,7 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Show first 10
+        # Display first 10
         # ----------------------------------------------------
 
         print()
@@ -1669,7 +2957,7 @@ def main():
             )
 
         # ----------------------------------------------------
-        # Inspect first technology job
+        # Inspect first job
         # ----------------------------------------------------
 
         if jobs:
@@ -1707,9 +2995,13 @@ def main():
             "ERROR"
         )
 
-        print("-" * 60)
+        print(
+            "-" * 60
+        )
 
-        print(error)
+        print(
+            error
+        )
 
     finally:
 
