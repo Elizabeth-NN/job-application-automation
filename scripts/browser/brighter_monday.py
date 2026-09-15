@@ -540,12 +540,26 @@ def extract_application_method(page):
     }
 
 
-def get_job_details(page, job):
+def inspect_brightermonday_job(context, url, title):
     """
-    Visit a job page and return a normalized job dictionary.
-    """
+    Inspect one BrighterMonday job using the shared browser context.
 
-    url = job["url"]
+    Parameters
+    ----------
+    context : BrowserContext
+        Shared Playwright browser context.
+
+    url : str
+        BrighterMonday job URL.
+
+    title : str
+        Job title collected from the listing page.
+
+    Returns
+    -------
+    dict
+        Normalized inspected job.
+    """
 
     print()
     print("=" * 60)
@@ -554,96 +568,266 @@ def get_job_details(page, job):
     print()
     print(f"URL: {url}")
 
+    page = context.new_page()
+
     try:
-        response = page.goto(
-            url,
-            wait_until="domcontentloaded",
-            timeout=60000,
-        )
 
-        status = response.status if response else None
+        # ========================================================
+        # NAVIGATION
+        # ========================================================
 
-        print("Navigation started.")
-        print(f"Status: {status}")
+        try:
 
-        if status and status >= 400:
-            print(f"Unable to load job page: HTTP {status}")
+            response = page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+
+            status = response.status if response else None
+
+            print("Job navigation started.")
+            print(f"Status: {status}")
+
+            if status and status >= 400:
+
+                print(
+                    f"Unable to load job page: HTTP {status}"
+                )
+
+                return None
+
+            page.wait_for_timeout(1500)
+
+        except PlaywrightTimeoutError:
+
+            print(
+                "Job page navigation timed out."
+            )
+
             return None
 
-        page.wait_for_timeout(1200)
+        except Exception as exc:
 
-    except PlaywrightTimeoutError:
-        print("Job page navigation timed out.")
-        return None
+            print(
+                f"Job page error: {exc}"
+            )
 
-    except Exception as exc:
-        print(f"Job page error: {exc}")
-        return None
+            return None
 
-    print("Job page loaded.")
-    print(f"Status: {status}")
+        print("Job page loaded.")
+        print(f"Status: {status}")
 
-    title = job.get("title")
+        # ========================================================
+        # PAGE TITLE
+        # ========================================================
 
-    try:
-        page_title = clean_text(page.title())
+        actual_title = clean_text(title)
 
-        if (
-            page_title
-            and "brightermonday" not in page_title.lower()
-            and len(page_title) < 200
-        ):
-            title = page_title
+        try:
 
-    except Exception:
-        pass
+            page_title = clean_text(
+                page.title()
+            )
 
-    try:
-        body_text = clean_text(page.locator("body").inner_text())
-    except Exception:
-        body_text = ""
+            if (
+                page_title
+                and "brightermonday" not in page_title.lower()
+                and len(page_title) < 200
+            ):
 
-    company = None
+                actual_title = page_title
 
-    company_patterns = [
-        r"\bCompany\s*:?\s*([A-Za-z0-9&.,'()\- ]+)",
-        r"\bEmployer\s*:?\s*([A-Za-z0-9&.,'()\- ]+)",
-    ]
+        except Exception:
+            pass
 
-    for pattern in company_patterns:
-        match = re.search(pattern, body_text, re.IGNORECASE)
+        # ========================================================
+        # BODY TEXT
+        # ========================================================
 
-        if match:
-            value = clean_text(match.group(1))
+        try:
 
-            if value and len(value) < 150:
-                company = value
-                break
+            body_text = clean_text(
+                page.locator("body").inner_text(
+                    timeout=10000
+                )
+            )
 
-    metadata = extract_metadata(page)
-    description = extract_description(page)
-    application = extract_application_method(page)
+        except Exception:
 
-    result = {
-        "title": title,
-        "company": company,
-        "location": metadata["location"],
-        "job_type": metadata["job_type"],
-        "qualification": metadata["qualification"],
-        "experience_level": metadata["experience_level"],
-        "experience_length": metadata["experience_length"],
-        "experience": metadata["experience"],
-        "posted": metadata["posted"],
-        "deadline": metadata["deadline"],
-        "description": description,
-        "url": url,
-        "application_method": application["application_method"],
-        "application_url": application["application_url"],
-        "source": "brightermonday",
-    }
+            body_text = ""
 
-    return result
+        # ========================================================
+        # COMPANY
+        # ========================================================
 
+        company = None
+
+        company_patterns = [
+
+            r"\bCompany\s*:?\s*([A-Za-z0-9&.,'()\- ]+)",
+
+            r"\bEmployer\s*:?\s*([A-Za-z0-9&.,'()\- ]+)",
+
+        ]
+
+        for pattern in company_patterns:
+
+            match = re.search(
+                pattern,
+                body_text,
+                re.IGNORECASE,
+            )
+
+            if match:
+
+                value = clean_text(
+                    match.group(1)
+                )
+
+                if value and len(value) < 150:
+
+                    company = value
+
+                    break
+
+        # ========================================================
+        # METADATA
+        # ========================================================
+
+        metadata = extract_metadata(page)
+
+        # ========================================================
+        # DESCRIPTION
+        # ========================================================
+
+        description = extract_description(
+            page
+        )
+
+        # ========================================================
+        # APPLICATION
+        # ========================================================
+
+        application = extract_application_method(
+            page
+        )
+
+        # ========================================================
+        # NORMALIZED RESULT
+        # ========================================================
+
+        result = {
+
+            "title": actual_title,
+
+            "company": company,
+
+            "location": metadata.get(
+                "location"
+            ),
+
+            "job_type": metadata.get(
+                "job_type"
+            ),
+
+            "qualification": metadata.get(
+                "qualification"
+            ),
+
+            "experience_level": metadata.get(
+                "experience_level"
+            ),
+
+            "experience_length": metadata.get(
+                "experience_length"
+            ),
+
+            "experience": metadata.get(
+                "experience"
+            ),
+
+            "posted": metadata.get(
+                "posted"
+            ),
+
+            "deadline": metadata.get(
+                "deadline"
+            ),
+
+            "description": description,
+
+            "url": url,
+
+            "application_method": application.get(
+                "application_method"
+            ),
+
+            "application_url": application.get(
+                "application_url"
+            ),
+
+            "source": "brightermonday",
+
+        }
+
+        # ========================================================
+        # DISPLAY
+        # ========================================================
+
+        print()
+        print("INSPECTED JOB")
+        print("-" * 60)
+
+        print(
+            f"Title: {result['title']}"
+        )
+
+        print(
+            f"Company: {result['company'] or ''}"
+        )
+
+        print(
+            f"Location: {result['location'] or 'Not found'}"
+        )
+
+        print(
+            f"Job Type: {result['job_type'] or 'Not found'}"
+        )
+
+        print(
+            f"Qualification: "
+            f"{result['qualification'] or 'Not found'}"
+        )
+
+        print(
+            f"Experience: "
+            f"{result['experience'] or 'Not found'}"
+        )
+
+        print(
+            f"Posted: "
+            f"{result['posted'] or 'Not found'}"
+        )
+
+        print(
+            f"Deadline: "
+            f"{result['deadline'] or 'Not found'}"
+        )
+
+        print(
+            f"Description length: "
+            f"{len(result['description'] or '')}"
+        )
+
+        return result
+
+    finally:
+
+        try:
+            page.close()
+        except Exception:
+            pass
 
 def collect_jobs():
     """

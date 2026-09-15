@@ -49,6 +49,8 @@ from scripts.browser.myjobmag import (
 
 from scripts.browser.brighter_monday import (
     collect_job_links as collect_brightermonday_links,
+    inspect_brightermonday_job as inspect_brightermonday_job
+
     
 )
 
@@ -96,7 +98,7 @@ except ImportError:
 # Keep this small while testing.
 #
 # Set to None when the pipeline is confirmed to be working.
-MAX_JOBS = 3
+MAX_JOBS = None
 
 
 # Automatic application submission is intentionally disabled.
@@ -1069,7 +1071,7 @@ def run_automation():
 
             brightermonday_jobs = (
                 collect_brightermonday_links(
-                    context
+                    page
                 )
             )
 
