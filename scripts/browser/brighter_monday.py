@@ -1,20 +1,29 @@
-
 """
-BrighterMonday browser automation.
+BrighterMonday browser automation layer.
 
-Responsibilities:
-- Launch Chromium using the reusable browser manager
-- Collect job links from multiple listing pages
-- Inspect individual job pages
-- Extract structured job information
-- Detect application method
-- Extract application URL/email
+Responsibilities
+----------------
+1. Open BrighterMonday.
+2. Search the Software & Data category.
+3. Paginate through job listings.
+4. Collect unique job links.
+5. Inspect individual jobs.
+6. Extract job information and application details.
 
-This module is intentionally site-specific.
-Generic browser functionality belongs in browser.py.
+This module uses Playwright for browser-based collection.
+
+It does NOT:
+    - match jobs against the candidate profile
+    - generate CVs
+    - generate cover letters
+    - submit applications
+    - modify the job tracker
 """
+
+from __future__ import annotations
 
 import re
+from typing import Dict, List, Optional
 from urllib.parse import urljoin
 
 from scripts.browser.browser import (
@@ -23,194 +32,411 @@ from scripts.browser.browser import (
 )
 
 
-BASE_URL = "https://www.brightermonday.co.ke"
-JOBS_URL = f"{BASE_URL}/jobs"
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-# Number of listing pages to collect.
+BASE_URL = "https://www.brightermonday.co.ke"
+
+SOFTWARE_DATA_URL = (
+    f"{BASE_URL}/jobs/software-data"
+)
+
 MAX_PAGES = 5
+
+HEADLESS = False
+
+PAGE_TIMEOUT = 60000
+
+
+# ============================================================
+# TECHNOLOGY FILTERS
+# ============================================================
+
+TECH_TITLE_PATTERNS = [
+    # Software development
+    r"\bsoftware\s+developer\b",
+    r"\bsoftware\s+engineer\b",
+    r"\bsoftware\s+development\b",
+
+    # Web development
+    r"\bweb\s+developer\b",
+    r"\bwebsite\s+developer\b",
+    r"\bwebmaster\b",
+
+    # Backend
+    r"\bbackend\s+developer\b",
+    r"\bback[-\s]?end\s+developer\b",
+
+    # Frontend
+    r"\bfrontend\s+developer\b",
+    r"\bfront[-\s]?end\s+developer\b",
+
+    # Full stack
+    r"\bfull[-\s]?stack\s+developer\b",
+    r"\bfullstack\s+developer\b",
+
+    # Programming languages
+    r"\bpython\s+developer\b",
+    r"\bjavascript\s+developer\b",
+    r"\btypescript\s+developer\b",
+    r"\bjava\s+developer\b",
+    r"\bphp\s+developer\b",
+    r"\bnode(?:\.js)?\s+developer\b",
+    r"\breact\s+developer\b",
+    r"\bgolang\s+developer\b",
+    r"\bgo\s+developer\b",
+
+    # Applications / systems
+    r"\bapplication\s+developer\b",
+    r"\bapplications\s+developer\b",
+    r"\bsystems?\s+developer\b",
+    r"\bprogrammer\b",
+
+    # Data
+    r"\bdata\s+analyst\b",
+    r"\bdata\s+engineer\b",
+    r"\bdata\s+scientist\b",
+    r"\bdata\s+developer\b",
+
+    # Database
+    r"\bdatabase\s+developer\b",
+    r"\bdatabase\s+administrator\b",
+
+    # Cloud / DevOps
+    r"\bdevops\b",
+    r"\bdevops\s+engineer\b",
+    r"\bcloud\s+engineer\b",
+    r"\bcloud\s+developer\b",
+
+    # QA
+    r"\bqa\s+engineer\b",
+    r"\bquality\s+assurance\s+engineer\b",
+    r"\bsoftware\s+tester\b",
+    r"\bsoftware\s+testing\b",
+    r"\btest\s+engineer\b",
+    r"\btest\s+analyst\b",
+
+    # Automation
+    r"\bautomation\s+engineer\b",
+    r"\bautomation\s+developer\b",
+    r"\brpa\s+developer\b",
+
+    # Enterprise technology
+    r"\bservicenow\s+developer\b",
+    r"\bdynamics\s+365\b",
+    r"\bpower\s+platform\b",
+    r"\berp\s+developer\b",
+    r"\bfineract\s+developer\b",
+
+    # IT development
+    r"\btechnical\s+developer\b",
+    r"\bict\s+developer\b",
+    r"\bit\s+developer\b",
+    r"\bsoftware\s+officer\b",
+
+    # Security
+    r"\bsecurity\s+analyst\b",
+    r"\bcyber\s+security\s+analyst\b",
+    r"\bcybersecurity\s+analyst\b",
+]
+
+
+EXCLUDED_TITLE_PATTERNS = [
+    # Sales
+    r"\bsales\s+representative\b",
+    r"\bsales\s+executive\b",
+    r"\bsales\s+agent\b",
+    r"\bsales\s+consultant\b",
+    r"\bsales\s+manager\b",
+    r"\bfield\s+sales\b",
+    r"\bsales\s+and\s+marketing\b",
+
+    # Business development
+    r"\bbusiness\s+development\b",
+
+    # Finance
+    r"\baccountant\b",
+    r"\baccounting\b",
+    r"\bfinance\s+assistant\b",
+    r"\bfinance\s+officer\b",
+    r"\bfinancial\s+analyst\b",
+    r"\bcredit\s+analyst\b",
+
+    # HR / administration
+    r"\bhuman\s+resources\b",
+    r"\bhr\s+officer\b",
+    r"\bhr\s+manager\b",
+    r"\badministrator\b",
+    r"\boffice\s+admin\b",
+    r"\boffice\s+administrator\b",
+    r"\breceptionist\b",
+
+    # Marketing / content
+    r"\bmarketing\b",
+    r"\bdigital\s+marketer\b",
+    r"\bgraphic\s+designer\b",
+    r"\bcontent\s+lead\b",
+
+    # Operations
+    r"\boperations\s+manager\b",
+    r"\boperations\s+officer\b",
+    r"\boperations\s+executive\b",
+
+    # Customer service
+    r"\bcustomer\s+service\b",
+    r"\brelationship\s+officer\b",
+    r"\brelationship\s+manager\b",
+
+    # Unrelated occupations
+    r"\breal\s+estate\b",
+    r"\bproperty\s+manager\b",
+    r"\bwaiter\b",
+    r"\bwaitress\b",
+    r"\bdriver\b",
+    r"\bchef\b",
+    r"\bnurse\b",
+    r"\bteacher\b",
+    r"\bpharmaceutical\s+sales\b",
+    r"\bprogram\s+officer\b",
+    r"\bproject\s+assistant\b",
+    r"\binstrumentation\s+engineer\b",
+    r"\bcctv\b",
+    r"\btechnical\s+operator\b",
+    r"\bhousekeeper\b",
+    r"\blogistics\b",
+]
 
 
 # ============================================================
 # GENERAL HELPERS
 # ============================================================
 
-def clean_text(text):
+def clean_text(value: Optional[str]) -> str:
     """Normalize whitespace."""
-    if not text:
+
+    if not value:
         return ""
 
-    return " ".join(text.split())
+    value = re.sub(r"\s+", " ", value)
+
+    return value.strip()
 
 
-def absolute_url(url):
+def normalize_url(url: str) -> str:
     """Convert a relative URL into an absolute BrighterMonday URL."""
+
     if not url:
         return ""
 
     return urljoin(BASE_URL, url)
 
 
-def safe_text(locator):
-    """Safely get text from a Playwright locator."""
-    try:
-        return clean_text(locator.inner_text())
-    except Exception:
-        return ""
+def matches_pattern(
+    text: str,
+    patterns: List[str],
+) -> bool:
+    """Return True if text matches any supplied regex."""
+
+    text = clean_text(text).lower()
+
+    for pattern in patterns:
+        if re.search(
+            pattern,
+            text,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+    return False
 
 
-def safe_attribute(locator, attribute):
-    """Safely get an element attribute."""
-    try:
-        return locator.get_attribute(attribute) or ""
-    except Exception:
-        return ""
-
-
-def get_body_lines(page):
+def is_technology_job(title: str) -> bool:
     """
-    Return visible body text as cleaned non-empty lines.
+    Determine whether a job title belongs to the
+    technology-oriented search.
+
+    Explicit exclusions take priority.
     """
-    try:
-        body = page.locator("body").inner_text()
 
-        lines = [
-            clean_text(line)
-            for line in body.splitlines()
-        ]
+    title = clean_text(title)
 
-        return [
-            line
-            for line in lines
-            if line
-        ]
+    if not title:
+        return False
 
-    except Exception:
-        return []
+    if matches_pattern(
+        title,
+        EXCLUDED_TITLE_PATTERNS,
+    ):
+        return False
+
+    return matches_pattern(
+        title,
+        TECH_TITLE_PATTERNS,
+    )
 
 
-def get_body_text(page):
-    """Return the complete cleaned body text."""
-    return " ".join(get_body_lines(page))
+# ============================================================
+# PAGE NAVIGATION
+# ============================================================
+
+def get_page(context):
+    """Create a new Playwright page."""
+
+    return context.new_page()
+
+
+def navigate(
+    page,
+    url: str,
+):
+    """Navigate to a URL and return the response."""
+
+    print("Navigation started.")
+
+    response = page.goto(
+        url,
+        wait_until="domcontentloaded",
+        timeout=PAGE_TIMEOUT,
+    )
+
+    if response:
+        print(
+            f"Status: {response.status}"
+        )
+
+        if response.status == 404:
+            print("Page does not exist (404).")
+
+    return response
 
 
 # ============================================================
 # LISTING PAGE
 # ============================================================
 
-def collect_job_links(page):
+def build_listing_url(
+    page_number: int,
+) -> str:
+    """Build a paginated Software & Data URL."""
+
+    if page_number == 1:
+        return SOFTWARE_DATA_URL
+
+    return (
+        f"{SOFTWARE_DATA_URL}"
+        f"?page={page_number}"
+    )
+
+
+def collect_listing_links(
+    page,
+) -> List[Dict[str, str]]:
     """
-    Collect job links from the currently loaded BrighterMonday
-    listing page.
+    Extract job links from the current listing page.
 
-    BrighterMonday job URLs use:
-
-        /listings/<job-slug>
-
-    Returns
-    -------
-    list[dict]
-        Example:
-
-        {
-            "title": "Sales Executive",
-            "url": "https://www.brightermonday.co.ke/listings/..."
-        }
+    Returns:
+        [
+            {
+                "title": "...",
+                "url": "..."
+            }
+        ]
     """
 
     print()
     print("Collecting job links...")
     print()
 
-    jobs = []
-    seen_urls = set()
+    results = []
 
-    try:
-        anchors = page.locator("a")
+    seen = set()
 
-        count = anchors.count()
+    links = page.locator(
+        'a[href*="/listings/"]'
+    ).all()
 
-        for index in range(count):
+    for link in links:
 
-            anchor = anchors.nth(index)
+        try:
 
-            href = safe_attribute(
-                anchor,
+            href = link.get_attribute(
                 "href"
             )
 
             if not href:
                 continue
 
-            href = absolute_url(href)
+            url = normalize_url(
+                href
+            )
 
-            # Only actual job listing URLs.
-            if "/listings/" not in href:
+            if "/listings/" not in url:
                 continue
 
-            # Avoid duplicate links on the same page.
-            if href in seen_urls:
-                continue
+            title = clean_text(
+                link.inner_text()
+            )
 
-            title = safe_text(anchor)
+            if not title:
+                title = clean_text(
+                    link.get_attribute(
+                        "title"
+                    )
+                )
 
             if not title:
                 continue
 
-            seen_urls.add(href)
+            if url in seen:
+                continue
 
-            jobs.append(
+            seen.add(url)
+
+            results.append(
                 {
                     "title": title,
-                    "url": href,
+                    "url": url,
                 }
             )
 
-    except Exception as error:
+        except Exception:
+            continue
 
-        print(
-            f"Error collecting job links: {error}"
-        )
-
-    print(
-        f"Jobs found on page: {len(jobs)}"
-    )
-
-    return jobs
+    return results
 
 
-def collect_paginated_jobs(
-    page,
-    max_pages=MAX_PAGES
-):
+# ============================================================
+# PAGINATED COLLECTION
+# ============================================================
+
+def collect_job_links(
+    context,
+    max_pages: int = MAX_PAGES,
+) -> List[Dict[str, str]]:
     """
-    Collect jobs from multiple BrighterMonday listing pages.
+    Collect unique technology-related jobs.
 
-    Returns unique jobs based on their URL.
+    Stops pagination when BrighterMonday returns 404.
     """
 
     print()
     print("=" * 60)
-    print("BRIGHTERMONDAY PAGINATED COLLECTION")
+    print("BRIGHTERMONDAY SOFTWARE & DATA COLLECTION")
     print("=" * 60)
 
     all_jobs = []
+
     seen_urls = set()
 
     for page_number in range(
         1,
-        max_pages + 1
+        max_pages + 1,
     ):
 
-        if page_number == 1:
-
-            url = JOBS_URL
-
-        else:
-
-            url = (
-                f"{JOBS_URL}"
-                f"?page={page_number}"
-            )
+        listing_url = build_listing_url(
+            page_number
+        )
 
         print()
         print(
@@ -219,73 +445,100 @@ def collect_paginated_jobs(
         )
 
         print(
-            f"URL: {url}"
+            f"URL: {listing_url}"
+        )
+
+        page = get_page(
+            context
         )
 
         try:
 
-            response = page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=60000
+            response = navigate(
+                page,
+                listing_url,
             )
 
-            print("Navigation started.")
-
-            if response:
+            if (
+                response
+                and response.status == 404
+            ):
                 print(
-                    f"Status: {response.status}"
+                    "Stopping pagination."
+                )
+                break
+
+            page.wait_for_timeout(
+                1500
+            )
+
+            jobs = collect_listing_links(
+                page
+            )
+
+            print(
+                f"Jobs found on page: "
+                f"{len(jobs)}"
+            )
+
+            new_jobs = 0
+            filtered_jobs = 0
+
+            for job in jobs:
+
+                url = job["url"]
+                title = job["title"]
+
+                if url in seen_urls:
+                    continue
+
+                seen_urls.add(url)
+
+                if not is_technology_job(
+                    title
+                ):
+                    filtered_jobs += 1
+                    continue
+
+                all_jobs.append(
+                    job
                 )
 
-            else:
-                print("Status: unknown")
+                new_jobs += 1
 
-            # Allow dynamically rendered jobs
-            # to appear.
-            page.wait_for_timeout(1500)
+            print(
+                f"New technology jobs added: "
+                f"{new_jobs}"
+            )
+
+            print(
+                f"Non-technology jobs filtered: "
+                f"{filtered_jobs}"
+            )
+
+            print(
+                f"Total technology jobs: "
+                f"{len(all_jobs)}"
+            )
 
         except Exception as error:
 
             print(
-                f"Failed to open page: {error}"
+                f"⚠ Failed to process page "
+                f"{page_number}: {error}"
             )
 
-            continue
+        finally:
 
-        jobs = collect_job_links(page)
-
-        new_jobs = 0
-
-        for job in jobs:
-
-            url = job["url"]
-
-            if url in seen_urls:
-                continue
-
-            seen_urls.add(url)
-
-            all_jobs.append(job)
-
-            new_jobs += 1
-
-        print(
-            f"New jobs added: {new_jobs}"
-        )
-
-        print(
-            f"Total unique jobs: "
-            f"{len(all_jobs)}"
-        )
+            page.close()
 
     print()
     print("=" * 60)
-    print("PAGINATION COMPLETE")
+    print("SOFTWARE & DATA COLLECTION COMPLETE")
     print("=" * 60)
 
-    print()
     print(
-        f"Total unique jobs collected: "
+        f"Total unique technology jobs: "
         f"{len(all_jobs)}"
     )
 
@@ -293,405 +546,776 @@ def collect_paginated_jobs(
 
 
 # ============================================================
-# JOB TITLE
+# BODY / PAGE TEXT HELPERS
 # ============================================================
 
-def extract_job_title(page):
-    """
-    Extract the actual job title.
-    """
+def get_body_text(page) -> str:
+    """Return normalized visible body text."""
 
-    # BrighterMonday job pages use an h1/h2
-    # around the job heading.
-
-    selectors = [
-        "h1",
-        "h2",
-        '[data-testid="job-title"]',
-    ]
-
-    ignored_titles = {
-        "find a job",
-        "search",
-        "job summary",
-        "job descriptions & requirements",
-        "job description",
-    }
-
-    for selector in selectors:
-
-        try:
-
-            locator = page.locator(
-                selector
-            )
-
-            count = locator.count()
-
-            for index in range(count):
-
-                text = safe_text(
-                    locator.nth(index)
-                )
-
-                if not text:
-                    continue
-
-                if text.lower() in ignored_titles:
-                    continue
-
-                return text
-
-        except Exception:
-            continue
-
-    # Fallback to page title.
     try:
 
-        title = clean_text(
-            page.title()
+        return clean_text(
+            page.locator(
+                "body"
+            ).inner_text()
         )
 
-        if " at " in title:
+    except Exception:
 
-            title = title.split(
-                " at ",
-                1
-            )[0]
+        return ""
 
-        return title
+
+def get_body_lines(page) -> List[str]:
+    """Return cleaned non-empty body lines."""
+
+    try:
+
+        raw = page.locator(
+            "body"
+        ).inner_text()
 
     except Exception:
+
+        return []
+
+    lines = []
+
+    for line in raw.splitlines():
+
+        line = clean_text(line)
+
+        if line:
+            lines.append(line)
+
+    return lines
+
+
+def find_text_pattern(
+    page,
+    pattern: str,
+    group: int = 1,
+) -> str:
+    """
+    Search the complete visible page text with regex.
+    """
+
+    body = get_body_text(page)
+
+    if not body:
         return ""
+
+    match = re.search(
+        pattern,
+        body,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return ""
+
+    try:
+        return clean_text(
+            match.group(group)
+        )
+    except IndexError:
+        return ""
+
+
+# ============================================================
+# GENERIC LABEL EXTRACTION
+# ============================================================
+
+def find_labeled_value(
+    page,
+    labels: List[str],
+) -> str:
+    """
+    Extract a value following a visible label.
+
+    Supports:
+
+        Location: Nairobi
+
+    and:
+
+        Location
+        Nairobi
+    """
+
+    lines = get_body_lines(
+        page
+    )
+
+    if not lines:
+        return ""
+
+    normalized_labels = {
+        clean_text(label).lower()
+        for label in labels
+    }
+
+    for index, line in enumerate(lines):
+
+        normalized = line.lower()
+
+        for label in normalized_labels:
+
+            # ----------------------------------------------
+            # Label: Value
+            # ----------------------------------------------
+
+            prefix = f"{label}:"
+
+            if normalized.startswith(prefix):
+
+                value = clean_text(
+                    line[len(prefix):]
+                )
+
+                if value:
+                    return value
+
+            # ----------------------------------------------
+            # Label
+            # Value
+            # ----------------------------------------------
+
+            if normalized == label:
+
+                if index + 1 < len(lines):
+
+                    value = clean_text(
+                        lines[index + 1]
+                    )
+
+                    if (
+                        value
+                        and value.lower()
+                        not in normalized_labels
+                    ):
+                        return value
+
+    return ""
+
+
+# ============================================================
+# TITLE
+# ============================================================
+
+def extract_title(
+    page,
+    fallback: str = "",
+) -> str:
+    """Extract the actual job title."""
+
+    try:
+
+        headings = page.locator(
+            "h1"
+        ).all()
+
+        for heading in headings:
+
+            text = clean_text(
+                heading.inner_text()
+            )
+
+            if text:
+
+                text = re.sub(
+                    r"\s+at\s+.+$",
+                    "",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+
+                return clean_text(
+                    text
+                )
+
+    except Exception:
+        pass
+
+    return clean_text(
+        fallback
+    )
 
 
 # ============================================================
 # COMPANY
 # ============================================================
 
-def extract_company(page):
+def extract_company(
+    page,
+) -> str:
     """
-    Extract the company name.
+    Extract company name.
 
-    BrighterMonday commonly renders the job section approximately
-    as:
-
-        Sales Executive
-        Mex Logistics Africa Ltd
-        Sales
-        Yesterday
-        Easy apply
-        New
-        Featured
-        Kenya
-        Full Time
-        ...
-
-    We therefore inspect the lines immediately following the
-    actual job title and filter out known metadata.
+    Uses structured elements first and
+    page title as a fallback.
     """
 
-    lines = get_body_lines(page)
+    selectors = [
+        'a[href*="/companies/"]',
+        '[class*="company"] a',
+        '[class*="company-name"]',
+        '[data-testid*="company"]',
+    ]
 
-    title = extract_job_title(page)
+    for selector in selectors:
 
-    if not title:
-        return ""
+        try:
 
-    ignored = {
-        "job seeker",
-        "blog",
-        "employers",
-        "help center",
-        "about us",
-        "login",
-        "sign up",
-        "post a job",
-        "find a job",
-        "search",
-        "homepage",
-        "job summary",
-        "job descriptions & requirements",
-        "job description",
-        "easy apply",
-        "featured",
-        "new",
-        "full time",
-        "part time",
-        "contract",
-        "internship",
-        "temporary",
-        "casual",
-        "sales",
-        "marketing",
-        "engineering & technology",
-        "shipping & logistics",
-        "kenya",
-        "nairobi",
-        "confidential",
-    }
+            elements = page.locator(
+                selector
+            ).all()
 
-    # Locate the job title.
-    title_index = None
+            for element in elements:
 
-    for index, line in enumerate(lines):
-
-        if line.lower() == title.lower():
-
-            title_index = index
-            break
-
-    if title_index is not None:
-
-        # Company should normally be immediately after
-        # the title.
-        for index in range(
-            title_index + 1,
-            min(
-                title_index + 8,
-                len(lines)
-            )
-        ):
-
-            candidate = lines[index]
-
-            if not candidate:
-                continue
-
-            if candidate.lower() in ignored:
-                continue
-
-            # Skip obvious dates.
-            if re.search(
-                r"\b(today|yesterday|"
-                r"hours?|days?|weeks?|months?)\b",
-                candidate.lower()
-            ):
-                continue
-
-            # Skip obvious job metadata.
-            if candidate.lower().startswith(
-                (
-                    "experience",
-                    "qualification",
-                    "language",
-                    "working hours",
-                    "applicant location",
-                    "job type",
-                    "min qualification",
+                text = clean_text(
+                    element.inner_text()
                 )
-            ):
-                continue
 
-            return candidate
+                if (
+                    text
+                    and 1 < len(text) < 150
+                    and text.lower()
+                    not in {
+                        "company",
+                        "employer",
+                    }
+                ):
+                    return text
 
-    # Fallback: extract company from page title.
+        except Exception:
+            continue
+
+    # Page title fallback.
     try:
 
         page_title = clean_text(
             page.title()
         )
 
-        # Example:
-        #
-        # Sales Executive at Mex Logistics Africa Ltd
-        # | BrighterMonday
+        match = re.search(
+            r"^(.+?)\s+at\s+(.+?)"
+            r"(?:\s*\|\s*BrighterMonday)?$",
+            page_title,
+            flags=re.IGNORECASE,
+        )
 
-        if " at " in page_title:
+        if match:
 
-            company = page_title.split(
-                " at ",
-                1
-            )[1]
+            company = clean_text(
+                match.group(2)
+            )
 
-            if " | " in company:
-
-                company = company.split(
-                    " | ",
-                    1
-                )[0]
-
-            # Remove date suffixes if present.
-            company = re.split(
-                r"\s+(?:January|February|March|April|May|June|"
-                r"July|August|September|October|November|December)\b",
-                company,
-                maxsplit=1
-            )[0]
-
-            return clean_text(company)
+            if company:
+                return company
 
     except Exception:
         pass
 
+    return find_labeled_value(
+        page,
+        [
+            "Company",
+            "Employer",
+            "Organisation",
+            "Organization",
+        ],
+    )
+
+
+# ============================================================
+# LOCATION
+# ============================================================
+
+def extract_location(
+    page,
+) -> str:
+    """
+    Extract location from the current BrighterMonday
+    job header.
+
+    Current BrighterMonday pages commonly expose:
+
+        Nairobi Full Time Confidential
+
+    or:
+
+        Kenya Full Time IT & Telecoms Confidential
+
+    rather than a separate Location label.
+    """
+
+    # ----------------------------------------------
+    # Strategy 1: explicit label
+    # ----------------------------------------------
+
+    value = find_labeled_value(
+        page,
+        [
+            "Location",
+            "Job Location",
+            "Where",
+            "Applicant Location",
+        ],
+    )
+
+    if value:
+        return value
+
+    # ----------------------------------------------
+    # Strategy 2: structured text containing
+    # known BrighterMonday location names.
+    # ----------------------------------------------
+
+    body = get_body_text(
+        page
+    )
+
+    if not body:
+        return ""
+
+    location_patterns = [
+        r"\bNairobi\b",
+        r"\bMombasa\b",
+        r"\bKisumu\b",
+        r"\bNakuru\b",
+        r"\bEldoret\b",
+        r"\bThika\b",
+        r"\bKiambu\b",
+        r"\bMachakos\b",
+        r"\bNyeri\b",
+        r"\bMeru\b",
+        r"\bKajiado\b",
+        r"\bKenya\b",
+        r"\bRest of Kenya\b",
+        r"\bOutside Kenya\b",
+        r"\bRemote\b",
+        r"\bWork From Home\b",
+    ]
+
+    for pattern in location_patterns:
+
+        match = re.search(
+            pattern,
+            body,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+
+            location = clean_text(
+                match.group(0)
+            )
+
+            # Normalize common location values.
+            if location.lower() == "work from home":
+                return "Remote"
+
+            return location
+
     return ""
 
 
 # ============================================================
-# METADATA
+# JOB TYPE
 # ============================================================
 
-def extract_value_after_label(
-    lines,
-    label,
-    max_distance=3
-):
+def extract_job_type(
+    page,
+) -> str:
     """
-    Extract the value appearing after a metadata label.
+    Extract employment type.
 
-    Example:
+    Current BrighterMonday pages expose values such as:
 
-        Min Qualification:
-        Diploma
-
-    Returns:
-
-        Diploma
+        Full Time
+        Part Time
+        Contract
+        Internship, Volunteer
     """
 
-    normalized_label = (
-        label.lower()
-        .rstrip(":")
+    value = find_labeled_value(
+        page,
+        [
+            "Job Type",
+            "Employment Type",
+            "Job type",
+            "Work Type",
+        ],
     )
 
-    for index, line in enumerate(lines):
+    if value:
+        return value
 
-        normalized_line = (
-            line.lower()
-            .rstrip(":")
+    body = get_body_text(
+        page
+    )
+
+    if not body:
+        return ""
+
+    patterns = [
+        r"\bFull Time\b",
+        r"\bPart Time\b",
+        r"\bContract\b",
+        r"\bInternship(?:,\s*Volunteer)?\b",
+        r"\bVolunteer\b",
+        r"\bTemporary\b",
+        r"\bFreelance\b",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            body,
+            flags=re.IGNORECASE,
         )
 
-        if normalized_line != normalized_label:
-            continue
-
-        for next_index in range(
-            index + 1,
-            min(
-                index + 1 + max_distance,
-                len(lines)
+        if match:
+            return clean_text(
+                match.group(0)
             )
+
+    return ""
+
+
+# ============================================================
+# QUALIFICATION
+# ============================================================
+
+def extract_qualification(
+    page,
+) -> str:
+    """
+    Extract minimum qualification.
+
+    Current BrighterMonday pages expose:
+
+        Min Qualification: Bachelors
+    """
+
+    value = find_labeled_value(
+        page,
+        [
+            "Min Qualification",
+            "Minimum Qualification",
+            "Qualification",
+            "Education",
+        ],
+    )
+
+    if value:
+        return value
+
+    value = find_text_pattern(
+        page,
+        r"Min\s+Qualification\s*:\s*"
+        r"(.+?)(?=\s+"
+        r"(?:Language Requirement|"
+        r"Working Hours|"
+        r"Applicant Location|"
+        r"Experience Level|"
+        r"Experience Length)"
+        r"|$)",
+    )
+
+    return value
+
+
+# ============================================================
+# EXPERIENCE LEVEL
+# ============================================================
+
+def extract_experience_level(
+    page,
+) -> str:
+    """
+    Extract BrighterMonday experience level.
+    """
+
+    value = find_labeled_value(
+        page,
+        [
+            "Experience Level",
+            "Career Level",
+            "Experience level",
+        ],
+    )
+
+    if value:
+        return value
+
+    value = find_text_pattern(
+        page,
+        r"Experience\s+Level\s*:\s*"
+        r"(.+?)(?=\s+"
+        r"(?:Experience Length|"
+        r"Language Requirement|"
+        r"Working Hours|"
+        r"Applicant Location)"
+        r"|$)",
+    )
+
+    if value:
+        return value
+
+    body = get_body_text(
+        page
+    )
+
+    levels = [
+        "Executive level",
+        "Senior level",
+        "Mid level",
+        "Entry level",
+        "Internship & Graduate",
+        "No Experience",
+    ]
+
+    for level in levels:
+
+        if re.search(
+            rf"\b{re.escape(level)}\b",
+            body,
+            flags=re.IGNORECASE,
         ):
+            return level
+
+    return ""
+
+
+# ============================================================
+# EXPERIENCE LENGTH
+# ============================================================
+
+def extract_experience_length(
+    page,
+) -> str:
+    """
+    Extract required years/months of experience.
+    """
+
+    value = find_labeled_value(
+        page,
+        [
+            "Experience Length",
+            "Years of Experience",
+            "Experience",
+        ],
+    )
+
+    if value:
+        return value
+
+    value = find_text_pattern(
+        page,
+        r"Experience\s+Length\s*:\s*"
+        r"(.+?)(?=\s+"
+        r"(?:Language Requirement|"
+        r"Working Hours|"
+        r"Applicant Location)"
+        r"|$)",
+    )
+
+    if value:
+        return value
+
+    body = get_body_text(
+        page
+    )
+
+    # Avoid taking arbitrary years from the job description.
+    patterns = [
+        r"\b\d+\+?\s+years?\b",
+        r"\b\d+\s+months?\b",
+        r"\b1\s+month\b",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            body,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
 
             value = clean_text(
-                lines[next_index]
+                match.group(0)
             )
 
-            if not value:
-                continue
-
-            return value
+            if value:
+                return value
 
     return ""
 
 
-def extract_job_metadata(page):
+# ============================================================
+# POSTED DATE
+# ============================================================
+
+def extract_posted(
+    page,
+) -> str:
     """
-    Extract structured BrighterMonday metadata.
-    """
-
-    lines = get_body_lines(page)
-
-    metadata = {
-        "location": "",
-        "job_type": "",
-        "qualification": "",
-        "experience_level": "",
-        "experience_length": "",
-        "posted": "",
-    }
-
-    # --------------------------------------------------------
-    # Applicant Location
-    # --------------------------------------------------------
-
-    metadata["location"] = (
-        extract_value_after_label(
-            lines,
-            "Applicant Location:"
-        )
-    )
-
-    # --------------------------------------------------------
-    # Working Hours
-    # --------------------------------------------------------
-
-    metadata["job_type"] = (
-        extract_value_after_label(
-            lines,
-            "Working Hours:"
-        )
-    )
-
-    # --------------------------------------------------------
-    # Qualification
-    # --------------------------------------------------------
-
-    metadata["qualification"] = (
-        extract_value_after_label(
-            lines,
-            "Min Qualification:"
-        )
-    )
-
-    # --------------------------------------------------------
-    # Experience level
-    # --------------------------------------------------------
-
-    metadata["experience_level"] = (
-        extract_value_after_label(
-            lines,
-            "Experience Level:"
-        )
-    )
-
-    # --------------------------------------------------------
-    # Experience length
-    # --------------------------------------------------------
-
-    metadata["experience_length"] = (
-        extract_value_after_label(
-            lines,
-            "Experience Length:"
-        )
-    )
-
-    # --------------------------------------------------------
-    # Posted date
-    # --------------------------------------------------------
-
-    metadata["posted"] = extract_posted_date(
-        lines
-    )
-
-    return metadata
-
-
-def extract_posted_date(lines):
-    """
-    Extract relative posted date.
-
-    Examples:
-
-        Today
-        Yesterday
-        2 days ago
-        3 weeks ago
+    Extract the relative published date shown by
+    BrighterMonday, e.g. "5 days ago".
     """
 
-    pattern = re.compile(
-        r"^(today|yesterday|"
-        r"\d+\s+hours?\s+ago|"
-        r"\d+\s+days?\s+ago|"
-        r"\d+\s+weeks?\s+ago|"
-        r"\d+\s+months?\s+ago)$",
-        re.IGNORECASE
+    value = find_labeled_value(
+        page,
+        [
+            "Posted",
+            "Date Posted",
+            "Published",
+        ],
     )
 
-    for line in lines:
+    if value:
+        return value
 
-        if pattern.match(line):
+    body = get_body_text(
+        page
+    )
 
-            return line
+    patterns = [
+        r"\b\d+\s+days?\s+ago\b",
+        r"\b\d+\s+weeks?\s+ago\b",
+        r"\b\d+\s+months?\s+ago\b",
+        r"\byesterday\b",
+        r"\btoday\b",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            body,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return clean_text(
+                match.group(0)
+            )
+
+    return ""
+
+
+# ============================================================
+# DEADLINE
+# ============================================================
+
+def extract_deadline(
+    page,
+) -> str:
+    """
+    Extract the application deadline.
+
+    Tries:
+        - visible Deadline label
+        - Application Deadline label
+        - Closing Date label
+        - common date formats
+        - page HTML as a final fallback
+    """
+
+    value = find_labeled_value(
+        page,
+        [
+            "Deadline",
+            "Application Deadline",
+            "Closing Date",
+            "Application closing date",
+            "Expires",
+        ],
+    )
+
+    if value:
+        return value
+
+    body = get_body_text(
+        page
+    )
+
+    if not body:
+        return ""
+
+    # Explicit date labels.
+    labeled_patterns = [
+        r"(?:Deadline|Application Deadline|"
+        r"Closing Date|Expires)\s*[:\-]?\s*"
+        r"([A-Za-z]+\s+\d{1,2},?\s+\d{4})",
+
+        r"(?:Deadline|Application Deadline|"
+        r"Closing Date|Expires)\s*[:\-]?\s*"
+        r"(\d{1,2}[/-]\d{1,2}[/-]\d{4})",
+
+        r"(?:Deadline|Application Deadline|"
+        r"Closing Date|Expires)\s*[:\-]?\s*"
+        r"(\d{4}-\d{2}-\d{2})",
+    ]
+
+    for pattern in labeled_patterns:
+
+        match = re.search(
+            pattern,
+            body,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+
+            return clean_text(
+                match.group(1)
+            )
+
+    # ----------------------------------------------
+    # HTML fallback.
+    #
+    # Some BrighterMonday data is present in the
+    # page source but not visible in body text.
+    # ----------------------------------------------
+
+    try:
+
+        html = page.content()
+
+    except Exception:
+
+        html = ""
+
+    if html:
+
+        html_patterns = [
+            r'"deadline"\s*:\s*"([^"]+)"',
+            r'"closingDate"\s*:\s*"([^"]+)"',
+            r'"applicationDeadline"\s*:\s*"([^"]+)"',
+            r'"expiresAt"\s*:\s*"([^"]+)"',
+        ]
+
+        for pattern in html_patterns:
+
+            match = re.search(
+                pattern,
+                html,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+
+                value = clean_text(
+                    match.group(1)
+                )
+
+                if value:
+                    return value
 
     return ""
 
@@ -700,315 +1324,189 @@ def extract_posted_date(lines):
 # DESCRIPTION
 # ============================================================
 
-def extract_description(page):
+def extract_description(
+    page,
+) -> str:
     """
-    Extract the job description and requirements.
-    """
+    Extract the job description.
 
-    lines = get_body_lines(page)
-
-    if not lines:
-        return ""
-
-    start_index = None
-
-    for index, line in enumerate(lines):
-
-        normalized = line.lower()
-
-        if (
-            normalized
-            == "job descriptions & requirements"
-            or normalized
-            == "job description & requirements"
-            or normalized
-            == "job description"
-        ):
-
-            start_index = index + 1
-
-            break
-
-    if start_index is None:
-
-        return get_body_text(page)
-
-    stop_phrases = {
-        "important safety tips",
-        "report job",
-        "log in to apply",
-        "continue with google",
-        "continue with linkedin",
-        "forgot password?",
-        "don't have an account? sign up to apply",
-        "sign up to apply",
-        "share link",
-        "similar jobs",
-        "stay updated",
-        "notify me",
-    }
-
-    description_lines = []
-
-    for line in lines[start_index:]:
-
-        normalized = line.lower()
-
-        if normalized in stop_phrases:
-            break
-
-        if any(
-            normalized.startswith(
-                phrase
-            )
-            for phrase in stop_phrases
-        ):
-            break
-
-        description_lines.append(
-            line
-        )
-
-    return clean_text(
-        " ".join(description_lines)
-    )
-
-
-# ============================================================
-# APPLICATION METHOD
-# ============================================================
-
-def extract_application_method(page):
-    """
-    Determine the application method.
-
-    Possible values:
-
-        brightermonday
-        email
-        external
-        unknown
+    Several selectors are attempted because BrighterMonday
+    uses different containers across listings.
     """
 
-    lines = get_body_lines(page)
+    selectors = [
+        '[class*="description"]',
+        '[class*="job-description"]',
+        '[data-testid*="description"]',
+        'article',
+        'main',
+    ]
 
-    body_text = " ".join(lines).lower()
+    candidates = []
 
-    # --------------------------------------------------------
-    # BrighterMonday internal application
-    # --------------------------------------------------------
+    for selector in selectors:
 
-    if (
-        "log in to apply" in body_text
-        or "sign up to apply" in body_text
-        or "easy apply" in body_text
-    ):
+        try:
 
-        return "brightermonday"
+            elements = page.locator(
+                selector
+            ).all()
 
-    # --------------------------------------------------------
-    # Email application
-    # --------------------------------------------------------
+            for element in elements:
 
-    try:
-
-        mailto = page.locator(
-            'a[href^="mailto:"]'
-        )
-
-        if mailto.count() > 0:
-
-            return "email"
-
-    except Exception:
-        pass
-
-    # Search page text.
-    emails = re.findall(
-        r"[A-Za-z0-9._%+-]+"
-        r"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-        body_text
-    )
-
-    if emails:
-
-        return "email"
-
-    # --------------------------------------------------------
-    # External application
-    # --------------------------------------------------------
-
-    try:
-
-        anchors = page.locator("a")
-
-        count = anchors.count()
-
-        for index in range(count):
-
-            anchor = anchors.nth(index)
-
-            href = safe_attribute(
-                anchor,
-                "href"
-            )
-
-            if not href:
-                continue
-
-            href = absolute_url(href)
-
-            if (
-                "apply" in href.lower()
-                and "brightermonday.co.ke"
-                not in href.lower()
-            ):
-
-                return "external"
-
-    except Exception:
-        pass
-
-    return "unknown"
-
-
-# ============================================================
-# APPLICATION URL
-# ============================================================
-
-def extract_application_url(page):
-    """
-    Extract BrighterMonday or external application URL.
-    """
-
-    try:
-
-        anchors = page.locator("a")
-
-        count = anchors.count()
-
-        for index in range(count):
-
-            anchor = anchors.nth(index)
-
-            href = safe_attribute(
-                anchor,
-                "href"
-            )
-
-            if not href:
-                continue
-
-            href = absolute_url(href)
-
-            text = safe_text(
-                anchor
-            ).lower()
-
-            # Internal application button.
-            if (
-                "log in and apply" in text
-                or "sign up to apply" in text
-            ):
-
-                return href
-
-            # BrighterMonday apply URL.
-            if (
-                "/account/customer/sign-up"
-                in href
-                and "apply=" in href
-            ):
-
-                return href
-
-            # External application.
-            if (
-                "apply" in text
-                and "brightermonday.co.ke"
-                not in href
-            ):
-
-                return href
-
-    except Exception:
-        pass
-
-    return ""
-
-
-# ============================================================
-# APPLICATION EMAIL
-# ============================================================
-
-def extract_application_email(page):
-    """
-    Extract an application email address.
-    """
-
-    # First check mailto links.
-    try:
-
-        mailto = page.locator(
-            'a[href^="mailto:"]'
-        )
-
-        count = mailto.count()
-
-        for index in range(count):
-
-            href = safe_attribute(
-                mailto.nth(index),
-                "href"
-            )
-
-            if not href:
-                continue
-
-            if href.lower().startswith(
-                "mailto:"
-            ):
-
-                email = (
-                    href[7:]
-                    .split("?", 1)[0]
-                    .strip()
+                text = clean_text(
+                    element.inner_text()
                 )
 
-                if email:
-                    return email
+                if len(text) > 300:
+                    candidates.append(
+                        text
+                    )
+
+        except Exception:
+            continue
+
+    if candidates:
+
+        return max(
+            candidates,
+            key=len,
+        )
+
+    return get_body_text(
+        page
+    )
+
+
+# ============================================================
+# APPLICATION EXTRACTION
+# ============================================================
+
+def extract_application(
+    page,
+) -> Dict[str, str]:
+    """
+    Extract BrighterMonday application details.
+
+    Returns:
+        {
+            "method": "brightermonday",
+            "url": "...",
+            "email": "",
+            "subject": ""
+        }
+    """
+
+    application = {
+        "method": "brightermonday",
+        "url": "",
+        "email": "",
+        "subject": "",
+    }
+
+    selectors = [
+        'a[href*="/account/customer/sign-up"]',
+        'a[href*="?apply="]',
+        'a[href*="/job-application/"]',
+        'a:has-text("Apply")',
+        'a:has-text("Log In and Apply")',
+        'a:has-text("Sign Up to Apply")',
+    ]
+
+    seen = set()
+
+    for selector in selectors:
+
+        try:
+
+            links = page.locator(
+                selector
+            ).all()
+
+            for link in links:
+
+                href = link.get_attribute(
+                    "href"
+                )
+
+                if not href:
+                    continue
+
+                url = normalize_url(
+                    href
+                )
+
+                if url in seen:
+                    continue
+
+                seen.add(url)
+
+                if (
+                    "sign-up?apply="
+                    in url
+                    or "?apply="
+                    in url
+                ):
+
+                    application["url"] = url
+
+                    return application
+
+        except Exception:
+            continue
+
+    # Fallback: inspect all links.
+    try:
+
+        links = page.locator(
+            "a"
+        ).all()
+
+        for link in links:
+
+            href = link.get_attribute(
+                "href"
+            )
+
+            text = clean_text(
+                link.inner_text()
+            ).lower()
+
+            if not href:
+                continue
+
+            url = normalize_url(
+                href
+            )
+
+            if (
+                "apply" in text
+                or "apply" in url.lower()
+            ):
+
+                application["url"] = url
+
+                return application
 
     except Exception:
         pass
 
-    # Fallback: search page text.
-    body_text = get_body_text(page)
-
-    emails = re.findall(
-        r"[A-Za-z0-9._%+-]+"
-        r"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-        body_text
-    )
-
-    if emails:
-
-        return emails[0]
-
-    return ""
+    return application
 
 
 # ============================================================
-# COMPLETE JOB INSPECTION
+# INSPECT ONE JOB
 # ============================================================
 
 def inspect_job(
-    page,
-    job_url
-):
+    context,
+    job_url: str,
+    fallback_title: str = "",
+) -> Dict:
     """
-    Inspect one BrighterMonday job page.
+    Open and inspect one BrighterMonday job.
 
-    Returns a structured dictionary.
+    Returns a normalized job dictionary.
     """
 
     print()
@@ -1021,251 +1519,255 @@ def inspect_job(
         f"URL: {job_url}"
     )
 
+    page = get_page(
+        context
+    )
+
     try:
 
-        response = page.goto(
+        response = navigate(
+            page,
             job_url,
-            wait_until="domcontentloaded",
-            timeout=60000
         )
 
-        print("Navigation started.")
-
-        if response:
-
-            print(
-                f"Status: {response.status}"
-            )
-
-        else:
-
-            print(
-                "Status: unknown"
-            )
+        page.wait_for_timeout(
+            1200
+        )
 
         print(
             "Job page loaded."
         )
 
-        # Allow dynamic content to finish rendering.
-        page.wait_for_timeout(1200)
+        if response:
 
-    except Exception as error:
-
-        print(
-            f"Failed to load job page: "
-            f"{error}"
-        )
-
-        return {
-            "title": "",
-            "company": "",
-            "url": job_url,
-            "location": "",
-            "job_type": "",
-            "qualification": "",
-            "experience_level": "",
-            "experience_length": "",
-            "experience": "",
-            "posted": "",
-            "description": "",
-            "application_method": "unknown",
-            "application_url": "",
-            "application_email": "",
-        }
-
-    # --------------------------------------------------------
-    # Extract fields
-    # --------------------------------------------------------
-
-    title = extract_job_title(
-        page
-    )
-
-    company = extract_company(
-        page
-    )
-
-    metadata = extract_job_metadata(
-        page
-    )
-
-    description = extract_description(
-        page
-    )
-
-    application_method = (
-        extract_application_method(
-            page
-        )
-    )
-
-    application_url = (
-        extract_application_url(
-            page
-        )
-    )
-
-    application_email = (
-        extract_application_email(
-            page
-        )
-    )
-
-    # --------------------------------------------------------
-    # Combine experience
-    # --------------------------------------------------------
-
-    experience = ""
-
-    if metadata["experience_level"]:
-
-        experience = (
-            metadata["experience_level"]
-        )
-
-        if metadata[
-            "experience_length"
-        ]:
-
-            experience += (
-                f" "
-                f"({metadata['experience_length']})"
+            print(
+                f"Status: "
+                f"{response.status}"
             )
 
-    elif metadata[
-        "experience_length"
-    ]:
+        # ----------------------------------------------------
+        # Extract fields
+        # ----------------------------------------------------
 
-        experience = (
-            metadata["experience_length"]
+        title = extract_title(
+            page,
+            fallback_title,
         )
 
-    # --------------------------------------------------------
-    # Display result
-    # --------------------------------------------------------
+        company = extract_company(
+            page
+        )
 
-    print()
-    print("JOB INFORMATION")
-    print("-" * 60)
+        location = extract_location(
+            page
+        )
 
-    print(
-        f"Title: "
-        f"{title or 'Not found'}"
-    )
+        job_type = extract_job_type(
+            page
+        )
 
-    print(
-        f"Company: "
-        f"{company or 'Not found'}"
-    )
+        qualification = extract_qualification(
+            page
+        )
 
-    print(
-        f"Location: "
-        f"{metadata['location'] or 'Not found'}"
-    )
+        experience_level = extract_experience_level(
+            page
+        )
 
-    print(
-        f"Job Type: "
-        f"{metadata['job_type'] or 'Not found'}"
-    )
+        experience_length = extract_experience_length(
+            page
+        )
 
-    print(
-        f"Qualification: "
-        f"{metadata['qualification'] or 'Not found'}"
-    )
+        posted = extract_posted(
+            page
+        )
 
-    print(
-        f"Experience Level: "
-        f"{metadata['experience_level'] or 'Not found'}"
-    )
+        deadline = extract_deadline(
+            page
+        )
 
-    print(
-        f"Experience Length: "
-        f"{metadata['experience_length'] or 'Not found'}"
-    )
+        description = extract_description(
+            page
+        )
 
-    print(
-        f"Experience: "
-        f"{experience or 'Not found'}"
-    )
+        application = extract_application(
+            page
+        )
 
-    print(
-        f"Posted: "
-        f"{metadata['posted'] or 'Not found'}"
-    )
+        # ----------------------------------------------------
+        # Build combined experience
+        # ----------------------------------------------------
 
-    print(
-        f"Description length: "
-        f"{len(description)}"
-    )
+        experience = ""
 
-    print()
-    print("APPLICATION METHOD")
-    print("-" * 60)
+        if (
+            experience_level
+            and experience_length
+        ):
 
-    print(
-        f"Method: "
-        f"{application_method}"
-    )
+            experience = (
+                f"{experience_level} "
+                f"({experience_length})"
+            )
 
-    if application_email:
+        elif experience_level:
+
+            experience = experience_level
+
+        elif experience_length:
+
+            experience = experience_length
+
+        # ----------------------------------------------------
+        # Normalized job
+        # ----------------------------------------------------
+
+        job = {
+            "title": title,
+            "company": company,
+            "location": location,
+            "job_type": job_type,
+            "qualification": qualification,
+            "experience_level": experience_level,
+            "experience_length": experience_length,
+            "experience": experience,
+            "posted": posted,
+            "deadline": deadline,
+            "description": description,
+            "url": job_url,
+            "application": application,
+            "application_method": application.get(
+                "method",
+                "",
+            ),
+            "application_url": application.get(
+                "url",
+                "",
+            ),
+            "application_email": application.get(
+                "email",
+                "",
+            ),
+        }
+
+        # ----------------------------------------------------
+        # Display
+        # ----------------------------------------------------
+
+        print()
+        print(
+            "JOB INFORMATION"
+        )
+        print("-" * 60)
 
         print(
-            f"Email: "
-            f"{application_email}"
+            f"Title: "
+            f"{title or 'Not found'}"
         )
-
-    if application_url:
 
         print(
-            f"URL: "
-            f"{application_url}"
+            f"Company: "
+            f"{company or 'Not found'}"
         )
 
-    return {
-        "title": title,
-        "company": company,
-        "url": job_url,
-        "location": metadata["location"],
-        "job_type": metadata["job_type"],
-        "qualification": metadata["qualification"],
-        "experience_level": metadata["experience_level"],
-        "experience_length": metadata["experience_length"],
-        "experience": experience,
-        "posted": metadata["posted"],
-        "description": description,
-        "application_method": application_method,
-        "application_url": application_url,
-        "application_email": application_email,
-    }
+        print(
+            f"Location: "
+            f"{location or 'Not found'}"
+        )
+
+        print(
+            f"Job Type: "
+            f"{job_type or 'Not found'}"
+        )
+
+        print(
+            f"Qualification: "
+            f"{qualification or 'Not found'}"
+        )
+
+        print(
+            f"Experience Level: "
+            f"{experience_level or 'Not found'}"
+        )
+
+        print(
+            f"Experience Length: "
+            f"{experience_length or 'Not found'}"
+        )
+
+        print(
+            f"Experience: "
+            f"{experience or 'Not found'}"
+        )
+
+        print(
+            f"Posted: "
+            f"{posted or 'Not found'}"
+        )
+
+        print(
+            f"Deadline: "
+            f"{deadline or 'Not found'}"
+        )
+
+        print(
+            f"Description length: "
+            f"{len(description)}"
+        )
+
+        print()
+        print(
+            "APPLICATION METHOD"
+        )
+        print("-" * 60)
+
+        print(
+            f"Method: "
+            f"{application.get('method', '')}"
+        )
+
+        if application.get("url"):
+
+            print(
+                f"URL: "
+                f"{application['url']}"
+            )
+
+        if application.get("email"):
+
+            print(
+                f"Email: "
+                f"{application['email']}"
+            )
+
+        return job
+
+    finally:
+
+        page.close()
 
 
 # ============================================================
-# MAIN TEST
+# TEST
 # ============================================================
 
 def main():
     """
-    Run a standalone BrighterMonday browser test.
+    Test the BrighterMonday browser layer.
     """
 
     playwright = None
     browser = None
-    context = None
 
     try:
 
         # ----------------------------------------------------
-        # Launch browser
+        # Start browser
         # ----------------------------------------------------
 
-        playwright, browser, context = (
-            launch_browser(
-                headless=False
-            )
+        playwright, browser, context = launch_browser(
+            headless=HEADLESS
         )
-
-        page = context.new_page()
 
         # ----------------------------------------------------
         # Open BrighterMonday
@@ -1276,14 +1778,13 @@ def main():
             "Opening BrighterMonday..."
         )
 
-        response = page.goto(
-            JOBS_URL,
-            wait_until="domcontentloaded",
-            timeout=60000
+        page = get_page(
+            context
         )
 
-        print(
-            "Navigation started."
+        response = navigate(
+            page,
+            BASE_URL,
         )
 
         if response:
@@ -1292,40 +1793,36 @@ def main():
                 f"Status: {response.status}"
             )
 
-        else:
-
-            print(
-                "Status: unknown"
-            )
-
         print(
-            f"Page title: "
-            f"{page.title()}"
+            f"Page title: {page.title()}"
         )
 
-        page.wait_for_timeout(
-            1500
-        )
+        page.close()
 
         # ----------------------------------------------------
-        # Collect all jobs
+        # Collect jobs
         # ----------------------------------------------------
 
-        jobs = collect_paginated_jobs(
-            page,
-            max_pages=MAX_PAGES
+        jobs = collect_job_links(
+            context,
+            max_pages=MAX_PAGES,
         )
 
         print()
         print(
             f"Found {len(jobs)} "
-            f"unique job links."
+            f"technology job links."
         )
 
-        # Display first five.
+        # ----------------------------------------------------
+        # Show first 10
+        # ----------------------------------------------------
+
+        print()
+
         for index, job in enumerate(
-            jobs[:5],
-            start=1
+            jobs[:10],
+            start=1,
         ):
 
             print(
@@ -1338,151 +1835,58 @@ def main():
             )
 
         # ----------------------------------------------------
-        # Test first real job
+        # Inspect first job
         # ----------------------------------------------------
 
-        if not jobs:
+        if jobs:
 
             print()
             print(
-                "No BrighterMonday "
-                "job listings found."
+                "=" * 60
+            )
+            print(
+                "TESTING FIRST TECHNOLOGY JOB"
+            )
+            print(
+                "=" * 60
             )
 
-            return
-
-        print()
-        print("=" * 60)
-        print(
-            "TESTING FIRST REAL JOB"
-        )
-        print("=" * 60)
-
-        result = inspect_job(
-            page,
-            jobs[0]["url"]
-        )
-
-        # ----------------------------------------------------
-        # Final summary
-        # ----------------------------------------------------
-
-        print()
-        print("=" * 60)
-        print(
-            "INSPECTION COMPLETE"
-        )
-        print("=" * 60)
-
-        print()
-        print(
-            f"Title: "
-            f"{result['title']}"
-        )
-
-        print(
-            f"Company: "
-            f"{result['company']}"
-        )
-
-        print(
-            f"Location: "
-            f"{result['location']}"
-        )
-
-        print(
-            f"Job Type: "
-            f"{result['job_type']}"
-        )
-
-        print(
-            f"Qualification: "
-            f"{result['qualification']}"
-        )
-
-        print(
-            f"Experience Level: "
-            f"{result['experience_level']}"
-        )
-
-        print(
-            f"Experience Length: "
-            f"{result['experience_length']}"
-        )
-
-        print(
-            f"Experience: "
-            f"{result['experience']}"
-        )
-
-        print(
-            f"Posted: "
-            f"{result['posted']}"
-        )
-
-        print(
-            f"Description length: "
-            f"{len(result['description'])}"
-        )
-
-        print(
-            f"Application method: "
-            f"{result['application_method']}"
-        )
-
-        if result[
-            "application_email"
-        ]:
-
-            print(
-                f"Application email: "
-                f"{result['application_email']}"
+            inspect_job(
+                context,
+                jobs[0]["url"],
+                jobs[0]["title"],
             )
 
-        if result[
-            "application_url"
-        ]:
+        else:
 
+            print()
             print(
-                f"Application URL: "
-                f"{result['application_url']}"
+                "No technology jobs found."
             )
 
     except Exception as error:
 
         print()
-        print("ERROR")
+        print(
+            "ERROR"
+        )
         print("-" * 60)
         print(error)
 
     finally:
 
-        print()
-        print(
-            "Closing browser..."
-        )
-
         if browser and playwright:
 
-            try:
+            print()
+            print(
+                "Closing browser..."
+            )
 
-                close_browser(
-                    playwright,
-                    browser
-                )
+            close_browser(
+                playwright,
+                browser,
+            )
 
-            except Exception as error:
-
-                print(
-                    f"Error closing browser: "
-                    f"{error}"
-                )
-
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
     main()
-
