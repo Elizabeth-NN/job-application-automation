@@ -1,3 +1,4 @@
+
 """
 MyJobMag browser automation layer.
 
@@ -52,12 +53,12 @@ PAGE_TIMEOUT = 60000
 
 
 # ============================================================
-# HELPERS
+# GENERAL HELPERS
 # ============================================================
 
 def clean_text(value) -> str:
     """
-    Normalize whitespace and remove surrounding whitespace.
+    Normalize whitespace and remove invisible characters.
     """
 
     if value is None:
@@ -66,19 +67,17 @@ def clean_text(value) -> str:
     text = str(value)
 
     text = text.replace("\xa0", " ")
+    text = text.replace("\u200b", "")
+    text = text.replace("\ufeff", "")
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text,
-    )
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
 def normalize_url(url: str) -> str:
     """
-    Convert a relative MyJobMag URL into an absolute URL.
+    Convert relative MyJobMag URLs to absolute URLs.
     """
 
     if not url:
@@ -98,6 +97,39 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def strip_url_query(url: str) -> str:
+    """
+    Remove query parameters and fragments.
+    """
+
+    if not url:
+        return ""
+
+    parsed = urlparse(url)
+
+    if not parsed.scheme or not parsed.netloc:
+        return url
+
+    return (
+        f"{parsed.scheme}://"
+        f"{parsed.netloc}"
+        f"{parsed.path}"
+    )
+
+
+def safe_inner_text(locator) -> str:
+    """
+    Safely get Playwright locator text.
+    """
+
+    try:
+        return clean_text(
+            locator.inner_text()
+        )
+    except Exception:
+        return ""
+
+
 def get_page_text(page) -> str:
     """
     Safely extract visible body text.
@@ -113,7 +145,7 @@ def get_page_text(page) -> str:
 
 def get_page_html(page) -> str:
     """
-    Safely extract the current page HTML.
+    Safely extract page HTML.
     """
 
     try:
@@ -122,25 +154,13 @@ def get_page_html(page) -> str:
         return ""
 
 
-def safe_inner_text(locator) -> str:
-    """
-    Safely get inner text from a Playwright locator.
-    """
-
-    try:
-        return clean_text(
-            locator.inner_text()
-        )
-    except Exception:
-        return ""
-
-
 def first_non_empty(values: List[str]) -> str:
     """
-    Return the first non-empty string.
+    Return the first non-empty value.
     """
 
     for value in values:
+
         value = clean_text(value)
 
         if value:
@@ -149,24 +169,41 @@ def first_non_empty(values: List[str]) -> str:
     return ""
 
 
+def unique_preserve_order(
+    values: List[str],
+) -> List[str]:
+    """
+    Remove duplicates while preserving order.
+    """
+
+    result = []
+    seen = set()
+
+    for value in values:
+
+        value = clean_text(value)
+
+        if not value:
+            continue
+
+        key = value.lower()
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(value)
+
+    return result
+
+
 # ============================================================
 # JOB LINK COLLECTION
 # ============================================================
 
 def is_job_url(url: str) -> bool:
     """
-    Determine whether a URL is a MyJobMag job detail page.
-
-    Real MyJobMag job pages use:
-
-        /job/
-
-    We intentionally reject:
-        /jobs/
-        /apply-now/
-        /blog/
-        /companies/
-        etc.
+    Return True only for MyJobMag job detail URLs.
     """
 
     if not url:
@@ -175,12 +212,13 @@ def is_job_url(url: str) -> bool:
     parsed = urlparse(url)
 
     if parsed.netloc:
+
         hostname = parsed.netloc.lower()
 
-        if (
-            hostname != "www.myjobmag.co.ke"
-            and hostname != "myjobmag.co.ke"
-        ):
+        if hostname not in {
+            "www.myjobmag.co.ke",
+            "myjobmag.co.ke",
+        }:
             return False
 
     path = parsed.path.lower()
@@ -193,17 +231,17 @@ def is_job_url(url: str) -> bool:
 
 def get_listing_title(anchor) -> str:
     """
-    Extract a job title from a listing anchor.
-
-    MyJobMag markup can contain nested elements, so we try:
-        1. anchor text
-        2. title attribute
-        3. aria-label
+    Extract a listing title from an anchor.
     """
+
+    text = safe_inner_text(anchor)
+
+    if text:
+        return text
 
     try:
         text = clean_text(
-            anchor.inner_text()
+            anchor.get_attribute("title")
         )
     except Exception:
         text = ""
@@ -212,28 +250,18 @@ def get_listing_title(anchor) -> str:
         return text
 
     try:
-        title = clean_text(
-            anchor.get_attribute("title")
-        )
-    except Exception:
-        title = ""
-
-    if title:
-        return title
-
-    try:
-        aria = clean_text(
+        text = clean_text(
             anchor.get_attribute("aria-label")
         )
     except Exception:
-        aria = ""
+        text = ""
 
-    return aria
+    return text
 
 
 def collect_job_links(page) -> List[Dict]:
     """
-    Collect unique MyJobMag job links from the listing page.
+    Collect unique MyJobMag job detail links.
 
     Returns:
 
@@ -253,19 +281,25 @@ def collect_job_links(page) -> List[Dict]:
     print()
 
     try:
+
         anchors = page.locator(
             "a[href]"
         ).all()
+
     except Exception:
+
         anchors = []
 
     for anchor in anchors:
 
         try:
+
             href = anchor.get_attribute(
                 "href"
             )
+
         except Exception:
+
             continue
 
         if not href:
@@ -276,13 +310,8 @@ def collect_job_links(page) -> List[Dict]:
         if not is_job_url(href):
             continue
 
-        # Remove query strings/fragments.
-        parsed = urlparse(href)
-
-        href = (
-            f"{parsed.scheme}://"
-            f"{parsed.netloc}"
-            f"{parsed.path}"
+        href = strip_url_query(
+            href
         )
 
         if href in seen_urls:
@@ -295,8 +324,6 @@ def collect_job_links(page) -> List[Dict]:
         if not title:
             continue
 
-        # MyJobMag sometimes places duplicate/nested links
-        # on the page. Avoid obvious non-job text.
         lower_title = title.lower()
 
         if lower_title in {
@@ -324,9 +351,11 @@ def collect_job_links(page) -> List[Dict]:
         jobs[:5],
         start=1,
     ):
+
         print(
             f"{index}. {job['title']}"
         )
+
         print(
             f"   {job['url']}"
         )
@@ -342,12 +371,7 @@ def get_json_ld_objects(
     soup: BeautifulSoup,
 ) -> List[dict]:
     """
-    Extract JSON-LD objects.
-
-    Handles:
-        - dictionaries
-        - lists
-        - @graph
+    Extract JSON-LD objects from the page.
     """
 
     objects = []
@@ -370,13 +394,16 @@ def get_json_ld_objects(
             continue
 
         try:
+
             data = json.loads(
                 raw
             )
+
         except (
             json.JSONDecodeError,
             TypeError,
         ):
+
             continue
 
         if isinstance(data, list):
@@ -411,9 +438,7 @@ def get_json_ld_objects(
                         item,
                         dict,
                     ):
-                        objects.append(
-                            item
-                        )
+                        objects.append(item)
 
     return objects
 
@@ -422,7 +447,7 @@ def get_job_posting_json_ld(
     soup: BeautifulSoup,
 ) -> Optional[dict]:
     """
-    Return the first JSON-LD JobPosting object.
+    Return a JobPosting JSON-LD object if present.
     """
 
     for data in get_json_ld_objects(
@@ -442,14 +467,47 @@ def get_job_posting_json_ld(
                 return data
 
         elif schema_type == "JobPosting":
+
             return data
 
     return None
 
 
 # ============================================================
-# JOB TITLE
+# TITLE
 # ============================================================
+
+def remove_title_suffix(
+    title: str,
+) -> str:
+    """
+    Remove common MyJobMag title suffixes.
+    """
+
+    title = clean_text(
+        title
+    )
+
+    patterns = [
+        r"\s+\|\s*MyJobMag.*$",
+        r"\s+(?:January|February|March|April|May|June|"
+        r"July|August|September|October|November|December),?"
+        r"\s+\d{4}.*$",
+    ]
+
+    for pattern in patterns:
+
+        title = re.sub(
+            pattern,
+            "",
+            title,
+            flags=re.IGNORECASE,
+        )
+
+    return clean_text(
+        title
+    )
+
 
 def extract_title(
     soup: BeautifulSoup,
@@ -457,7 +515,13 @@ def extract_title(
     fallback_title: str = "",
 ) -> str:
     """
-    Extract the actual job title.
+    Extract the actual MyJobMag job title.
+
+    Priority:
+        1. JSON-LD title
+        2. Main job-page H1
+        3. Page title
+        4. Listing-page fallback title
     """
 
     # --------------------------------------------------------
@@ -468,20 +532,25 @@ def extract_title(
 
         title = clean_text(
             json_ld.get(
-                "title"
+                "title",
+                "",
             )
         )
 
         if title:
-            return title
+            return remove_title_suffix(
+                title
+            )
 
     # --------------------------------------------------------
-    # 2. Main H1
+    # 2. Job-page H1
     # --------------------------------------------------------
 
     for selector in [
         "main h1",
         "article h1",
+        ".job-detail h1",
+        ".job-details h1",
         "h1",
     ]:
 
@@ -489,19 +558,25 @@ def extract_title(
             selector
         )
 
-        if element:
+        if not element:
+            continue
 
-            title = clean_text(
-                element.get_text(
-                    " ",
-                    strip=True,
-                )
+        title = clean_text(
+            element.get_text(
+                " ",
+                strip=True,
             )
+        )
 
-            if title:
-                return remove_title_suffix(
-                    title
-                )
+        if not title:
+            continue
+
+        title = remove_title_suffix(
+            title
+        )
+
+        if title:
+            return title
 
     # --------------------------------------------------------
     # 3. Page title
@@ -523,57 +598,13 @@ def extract_title(
         if title:
             return title
 
+    # --------------------------------------------------------
+    # 4. Original listing title
+    # --------------------------------------------------------
+
     return clean_text(
         fallback_title
     )
-
-
-def remove_title_suffix(
-    title: str,
-) -> str:
-    """
-    Remove common MyJobMag page-title suffixes.
-
-    Example:
-
-        ICT Data Scientist & AI Developer at Britam
-        September, 2026 | MyJobMag
-
-    becomes:
-
-        ICT Data Scientist & AI Developer at Britam
-    """
-
-    title = clean_text(
-        title
-    )
-
-    patterns = [
-        r"\s+\|\s*MyJobMag.*$",
-        r"\s+September,\s+\d{4}.*$",
-        r"\s+August,\s+\d{4}.*$",
-        r"\s+July,\s+\d{4}.*$",
-        r"\s+June,\s+\d{4}.*$",
-        r"\s+May,\s+\d{4}.*$",
-        r"\s+April,\s+\d{4}.*$",
-        r"\s+March,\s+\d{4}.*$",
-        r"\s+February,\s+\d{4}.*$",
-        r"\s+January,\s+\d{4}.*$",
-    ]
-
-    for pattern in patterns:
-
-        title = re.sub(
-            pattern,
-            "",
-            title,
-            flags=re.IGNORECASE,
-        )
-
-    return clean_text(
-        title
-    )
-
 
 # ============================================================
 # COMPANY
@@ -590,6 +621,7 @@ INVALID_COMPANY_VALUES = {
     "checkout salary structure",
     "view jobs",
     "view current vacancies",
+    "myjobmag",
 }
 
 
@@ -597,8 +629,7 @@ def is_valid_company(
     value: str,
 ) -> bool:
     """
-    Reject navigation/salary/widget text accidentally
-    captured as a company.
+    Reject navigation, salary and footer text.
     """
 
     value = clean_text(
@@ -618,12 +649,14 @@ def is_valid_company(
         "checkout salary",
         "mysalaryscale",
         "view jobs",
+        "view current vacancies",
         "jobs by industry",
         "jobs by education",
         "remote jobs",
         "career advice",
         "login",
         "sign up",
+        "never pay",
     ]
 
     if any(
@@ -642,12 +675,9 @@ def extract_company_from_title(
     title: str,
 ) -> str:
     """
-    Extract employer from:
+    Extract company from:
 
         Job Title at Company
-
-    This is an important fallback because MyJobMag's
-    surrounding page contains many unrelated links.
     """
 
     title = clean_text(
@@ -687,14 +717,14 @@ def extract_company(
     Extract employer/company.
 
     Priority:
-        1. JSON-LD hiringOrganization
-        2. Explicit employer/company metadata
-        3. Job title "at Company"
-        4. Carefully selected links
+        1. JSON-LD
+        2. Explicit metadata
+        3. Job title
+        4. Carefully selected employer links
     """
 
     # --------------------------------------------------------
-    # 1. JSON-LD
+    # JSON-LD
     # --------------------------------------------------------
 
     if json_ld:
@@ -734,17 +764,14 @@ def extract_company(
                 return name
 
     # --------------------------------------------------------
-    # 2. Meta tags
+    # Meta
     # --------------------------------------------------------
 
-    meta_selectors = [
+    for selector in [
         "meta[property='job:company']",
         "meta[name='job:company']",
         "meta[name='company']",
-        "meta[property='og:site_name']",
-    ]
-
-    for selector in meta_selectors:
+    ]:
 
         element = soup.select_one(
             selector
@@ -754,18 +781,16 @@ def extract_company(
             continue
 
         value = clean_text(
-            element.get(
-                "content"
-            )
+            element.get("content")
         )
 
         if is_valid_company(
             value
-        ) and value.lower() != "myjobmag":
+        ):
             return value
 
     # --------------------------------------------------------
-    # 3. Extract from title
+    # Title
     # --------------------------------------------------------
 
     company = extract_company_from_title(
@@ -776,63 +801,46 @@ def extract_company(
         return company
 
     # --------------------------------------------------------
-    # 4. Explicit HTML labels
+    # Employer links
     # --------------------------------------------------------
 
-    label_patterns = [
-        r"company",
-        r"employer",
-        r"hiring\s+organization",
-    ]
-
-    for element in soup.find_all(
-        string=True
+    for anchor in soup.select(
+        "a[href]"
     ):
 
-        label = clean_text(
-            str(element)
+        href = normalize_url(
+            anchor.get("href", "")
         )
 
-        if not label:
+        text = clean_text(
+            anchor.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if not text:
             continue
 
-        if not any(
-            re.fullmatch(
-                pattern,
-                label,
-                flags=re.IGNORECASE,
-            )
-            for pattern in label_patterns
+        lower_href = href.lower()
+
+        if (
+            "company" not in lower_href
+            and "employer" not in lower_href
+            and "/companies/" not in lower_href
         ):
             continue
 
-        parent = element.parent
-
-        if not parent:
-            continue
-
-        # Check next sibling.
-        sibling = parent.find_next_sibling()
-
-        if sibling:
-
-            value = clean_text(
-                sibling.get_text(
-                    " ",
-                    strip=True,
-                )
-            )
-
-            if is_valid_company(
-                value
-            ):
-                return value
+        if is_valid_company(
+            text
+        ):
+            return text
 
     return ""
 
 
 # ============================================================
-# GENERIC LABEL EXTRACTION
+# LABELED VALUE EXTRACTION
 # ============================================================
 
 def extract_labeled_value(
@@ -840,18 +848,18 @@ def extract_labeled_value(
     labels: List[str],
 ) -> str:
     """
-    Extract a value associated with a label.
+    Extract a metadata value associated with a label.
 
-    Handles:
-        - definition lists
-        - tables
-        - label/value containers
-        - nearby sibling elements
+    MyJobMag pages contain a lot of navigation, sidebar,
+    salary and footer text. Therefore this function prioritizes
+    structured HTML relationships and avoids searching the
+    entire page as one large text string.
     """
 
     expected = {
-        clean_text(label).lower()
+        clean_text(label).lower().rstrip(":")
         for label in labels
+        if clean_text(label)
     }
 
     # --------------------------------------------------------
@@ -865,14 +873,12 @@ def extract_labeled_value(
                 " ",
                 strip=True,
             )
-        ).lower()
+        ).lower().rstrip(":")
 
         if label not in expected:
             continue
 
-        dd = dt.find_next_sibling(
-            "dd"
-        )
+        dd = dt.find_next_sibling("dd")
 
         if dd:
 
@@ -892,9 +898,7 @@ def extract_labeled_value(
 
     for row in soup.select("tr"):
 
-        cells = row.select(
-            "th, td"
-        )
+        cells = row.select("th, td")
 
         if len(cells) < 2:
             continue
@@ -904,7 +908,7 @@ def extract_labeled_value(
                 " ",
                 strip=True,
             )
-        ).lower()
+        ).lower().rstrip(":")
 
         if label not in expected:
             continue
@@ -920,34 +924,56 @@ def extract_labeled_value(
             return value
 
     # --------------------------------------------------------
-    # 3. Label/value HTML elements
+    # 3. Label/value containers
+    #
+    # Look for a small element containing ONLY the label,
+    # then inspect its immediate siblings or parent.
     # --------------------------------------------------------
 
     for element in soup.find_all(
-        ["span", "div", "p", "li"]
+        ["span", "strong", "b", "label"]
     ):
 
-        text = clean_text(
+        label = clean_text(
             element.get_text(
                 " ",
                 strip=True,
             )
-        )
+        ).lower().rstrip(":")
 
-        if not text:
+        if label not in expected:
             continue
 
-        lower = text.lower()
+        # ----------------------------------------------------
+        # Same parent: label + value
+        # ----------------------------------------------------
 
-        for expected_label in expected:
+        parent = element.parent
 
-            if lower == expected_label:
+        if parent:
 
-                sibling = (
-                    element.find_next_sibling()
+            children = list(
+                parent.children
+            )
+
+            try:
+                index = children.index(
+                    element
                 )
+            except ValueError:
+                index = -1
 
-                if sibling:
+            if index >= 0:
+
+                for sibling in children[
+                    index + 1:
+                ]:
+
+                    if not hasattr(
+                        sibling,
+                        "get_text",
+                    ):
+                        continue
 
                     value = clean_text(
                         sibling.get_text(
@@ -956,11 +982,93 @@ def extract_labeled_value(
                         )
                     )
 
-                    if value:
-                        return value
+                    if value and value.lower() != label:
+                        if len(value) < 300:
+                            return value
+
+        # ----------------------------------------------------
+        # Immediate next sibling
+        # ----------------------------------------------------
+
+        sibling = element.find_next_sibling()
+
+        if sibling:
+
+            value = clean_text(
+                sibling.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if (
+                value
+                and value.lower() != label
+                and len(value) < 300
+            ):
+                return value
+
+    # --------------------------------------------------------
+    # 4. Common MyJobMag metadata blocks
+    #
+    # Search only relatively small containers instead of the
+    # entire webpage.
+    # --------------------------------------------------------
+
+    for container in soup.find_all(
+        ["li", "div", "p"]
+    ):
+
+        text = clean_text(
+            container.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if not text or len(text) > 500:
+            continue
+
+        lower_text = text.lower()
+
+        for label in expected:
+
+            prefix_patterns = [
+                f"{label}:",
+                f"{label} :",
+                label,
+            ]
+
+            for prefix in prefix_patterns:
+
+                if not lower_text.startswith(
+                    prefix
+                ):
+                    continue
+
+                value = clean_text(
+                    text[len(prefix):]
+                )
+
+                if not value:
+                    continue
+
+                # Reject obvious navigation contamination.
+                value_lower = value.lower()
+
+                if value_lower in {
+                    "jobs by",
+                    "view jobs",
+                    "view current vacancies",
+                    "remote jobs",
+                    "career advice",
+                }:
+                    continue
+
+                if len(value) < 300:
+                    return value
 
     return ""
-
 
 # ============================================================
 # LOCATION
@@ -975,7 +1083,7 @@ def extract_location(
     """
 
     # --------------------------------------------------------
-    # 1. JSON-LD
+    # JSON-LD
     # --------------------------------------------------------
 
     if json_ld:
@@ -988,6 +1096,7 @@ def extract_location(
             location,
             dict,
         ):
+
             address = location.get(
                 "address"
             )
@@ -997,45 +1106,39 @@ def extract_location(
                 dict,
             ):
 
-                city = clean_text(
-                    address.get(
-                        "addressLocality"
-                    )
-                )
-
-                region = clean_text(
-                    address.get(
-                        "addressRegion"
-                    )
-                )
-
-                country = clean_text(
-                    address.get(
-                        "addressCountry"
-                    )
-                )
+                parts = [
+                    clean_text(
+                        address.get(
+                            "addressLocality"
+                        )
+                    ),
+                    clean_text(
+                        address.get(
+                            "addressRegion"
+                        )
+                    ),
+                    clean_text(
+                        address.get(
+                            "addressCountry"
+                        )
+                    ),
+                ]
 
                 parts = [
-                    part
-                    for part in [
-                        city,
-                        region,
-                        country,
-                    ]
-                    if part
+                    value
+                    for value in parts
+                    if value
                 ]
 
                 if parts:
                     return ", ".join(parts)
 
-            value = clean_text(
-                location.get(
-                    "name"
-                )
+            name = clean_text(
+                location.get("name")
             )
 
-            if value:
-                return value
+            if name:
+                return name
 
         elif isinstance(
             location,
@@ -1060,39 +1163,35 @@ def extract_location(
                 ):
                     continue
 
-                city = clean_text(
-                    address.get(
-                        "addressLocality"
-                    )
-                )
-
-                region = clean_text(
-                    address.get(
-                        "addressRegion"
-                    )
-                )
-
-                country = clean_text(
-                    address.get(
-                        "addressCountry"
-                    )
-                )
+                parts = [
+                    clean_text(
+                        address.get(
+                            "addressLocality"
+                        )
+                    ),
+                    clean_text(
+                        address.get(
+                            "addressRegion"
+                        )
+                    ),
+                    clean_text(
+                        address.get(
+                            "addressCountry"
+                        )
+                    ),
+                ]
 
                 parts = [
-                    part
-                    for part in [
-                        city,
-                        region,
-                        country,
-                    ]
-                    if part
+                    value
+                    for value in parts
+                    if value
                 ]
 
                 if parts:
                     return ", ".join(parts)
 
     # --------------------------------------------------------
-    # 2. Explicit location label
+    # Explicit metadata
     # --------------------------------------------------------
 
     value = extract_labeled_value(
@@ -1100,7 +1199,6 @@ def extract_location(
         [
             "location",
             "job location",
-            "location:",
         ],
     )
 
@@ -1110,14 +1208,14 @@ def extract_location(
             value
         )
 
-        if len(value) < 100:
+        if len(value) <= 100:
             return value
 
     # --------------------------------------------------------
-    # 3. MyJobMag metadata pattern
+    # MyJobMag metadata row
     # --------------------------------------------------------
 
-    body = clean_text(
+    text = clean_text(
         soup.get_text(
             " ",
             strip=True,
@@ -1125,25 +1223,30 @@ def extract_location(
     )
 
     match = re.search(
-        r"\bLocation\s+([A-Za-z][A-Za-z ,/&-]{1,60}?)(?=\s+(?:Job Field|Job Type|Qualification|Experience|Posted|Deadline)\b)",
-        body,
+        r"\bLocation\s*:?\s*"
+        r"(.+?)"
+        r"(?=\s+\b(?:"
+        r"Job Field|Job Type|Qualification|"
+        r"Experience|Posted|Deadline|Salary"
+        r")\b)",
+        text,
         flags=re.IGNORECASE,
     )
 
     if match:
 
-        location = clean_text(
+        value = clean_text(
             match.group(1)
         )
 
-        if location:
-            return location
+        if value and len(value) <= 100:
+            return value
 
     return ""
 
 
 # ============================================================
-# JOB TYPE / QUALIFICATION / EXPERIENCE
+# JOB TYPE
 # ============================================================
 
 def extract_job_type(
@@ -1167,10 +1270,13 @@ def extract_job_type(
         [
             "job type",
             "employment type",
-            "type",
         ],
     )
 
+
+# ============================================================
+# QUALIFICATION
+# ============================================================
 
 def extract_qualification(
     soup: BeautifulSoup,
@@ -1186,11 +1292,27 @@ def extract_qualification(
     )
 
 
+# ============================================================
+# EXPERIENCE
+# ============================================================
+
 def extract_experience(
     soup: BeautifulSoup,
 ) -> str:
+    """
+    Extract the required experience from MyJobMag.
 
-    return extract_labeled_value(
+    Accepts common formats such as:
+        2 - 4 years
+        3 years
+        5+ years
+        2 years experience
+        1-2 years
+
+    Rejects values that appear to be unrelated page text.
+    """
+
+    value = extract_labeled_value(
         soup,
         [
             "experience",
@@ -1198,22 +1320,150 @@ def extract_experience(
         ],
     )
 
+    value = clean_text(
+        value
+    )
+
+    if not value:
+        return ""
+
+    # --------------------------------------------------------
+    # Valid experience patterns
+    # --------------------------------------------------------
+
+    patterns = [
+        r"\b\d+\s*-\s*\d+\s+years?\b",
+        r"\b\d+\s+to\s+\d+\s+years?\b",
+        r"\b\d+\+?\s+years?\b",
+        r"\b\d+\s*-\s*\d+\s+year\s+experience\b",
+        r"\b\d+\+?\s+years?\s+experience\b",
+        r"\bno\s+experience\b",
+        r"\bno\s+work\s+experience\b",
+        r"\bentry\s+level\b",
+    ]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            value,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+
+            return clean_text(
+                match.group(0)
+            )
+
+    # --------------------------------------------------------
+    # Reject obvious metadata contamination
+    # --------------------------------------------------------
+
+    lower_value = value.lower()
+
+    invalid_fragments = [
+        "location",
+        "job field",
+        "job type",
+        "qualification",
+        "posted",
+        "deadline",
+        "salary",
+        "jobs by",
+    ]
+
+    if any(
+        fragment in lower_value
+        for fragment in invalid_fragments
+    ):
+        return ""
+
+    # --------------------------------------------------------
+    # Final safety check
+    # --------------------------------------------------------
+
+    if len(value) > 100:
+        return ""
+
+    return value
 
 # ============================================================
-# DATE / DEADLINE
+# JOB FIELD
 # ============================================================
 
-DEADLINE_HEAD_RE = re.compile(
-    r"^(?:"
-    r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"        # 16 Sep 2026
-    r"|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}"     # Sep 16, 2026
-    r"|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"          # 16/09/2026
-    r"|\d{4}-\d{2}-\d{2}"                      # 2026-09-16
-    r"|Not specified|Open|Rolling"
-    r")",
-    flags=re.IGNORECASE,
-)
+def extract_job_field(
+    soup: BeautifulSoup,
+) -> str:
+    """
+    Extract the MyJobMag job field/category.
 
+    Rejects navigation and unrelated page text.
+    """
+
+    value = extract_labeled_value(
+        soup,
+        [
+            "job field",
+            "field",
+            "job category",
+        ],
+    )
+
+    value = clean_text(
+        value
+    )
+
+    if not value:
+        return ""
+
+    # --------------------------------------------------------
+    # Reject obvious navigation/footer contamination
+    # --------------------------------------------------------
+
+    lower_value = value.lower()
+
+    invalid_values = {
+        "jobs by",
+        "jobs by industry",
+        "jobs by education",
+        "jobs by title",
+        "jobs by location",
+        "remote jobs",
+    }
+
+    if lower_value in invalid_values:
+        return ""
+
+    invalid_fragments = [
+        "career advice",
+        "salary structure",
+        "mysalaryscale",
+        "view jobs",
+        "view current vacancies",
+        "never pay",
+        "login",
+        "sign up",
+    ]
+
+    if any(
+        fragment in lower_value
+        for fragment in invalid_fragments
+    ):
+        return ""
+
+    # --------------------------------------------------------
+    # Protect against accidentally capturing a paragraph
+    # --------------------------------------------------------
+
+    if len(value) > 200:
+        return ""
+
+    return value
+
+# ============================================================
+# POSTED DATE
+# ============================================================
 
 def extract_posted(
     soup: BeautifulSoup,
@@ -1231,7 +1481,6 @@ def extract_posted(
         if value:
             return value
 
-    # Explicit label.
     value = extract_labeled_value(
         soup,
         [
@@ -1242,12 +1491,24 @@ def extract_posted(
     )
 
     if value:
-        return value
 
-    # MyJobMag commonly exposes:
-    #
-    # Posted: Sep 16, 2026
-    #
+        match = re.search(
+            r"(?:"
+            r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}"
+            r"|"
+            r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
+            r"|"
+            r"\d{4}-\d{2}-\d{2}"
+            r")",
+            value,
+            flags=re.IGNORECASE,
+        )
+
+        if match:
+            return clean_text(
+                match.group(0)
+            )
+
     text = clean_text(
         soup.get_text(
             " ",
@@ -1256,8 +1517,14 @@ def extract_posted(
     )
 
     match = re.search(
-        r"\bPosted\s*:\s*"
-        r"([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+        r"\bPosted\s*:?\s*"
+        r"("
+        r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}"
+        r"|"
+        r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
+        r"|"
+        r"\d{4}-\d{2}-\d{2}"
+        r")",
         text,
         flags=re.IGNORECASE,
     )
@@ -1270,18 +1537,19 @@ def extract_posted(
     return None
 
 
+# ============================================================
+# DEADLINE
+# ============================================================
+
 def extract_deadline(
     soup: BeautifulSoup,
     json_ld: Optional[dict],
 ) -> Optional[str]:
     """
-    Extract the application deadline.
+    Extract only a real deadline value.
 
-    IMPORTANT: We only accept values that *start* with a real
-    date (or the literal "Not specified"). MyJobMag's page
-    layout places the deadline next to other metadata, and a
-    naive label lookup or a broad regex will happily return
-    the entire surrounding paragraph.
+    This intentionally avoids returning surrounding
+    paragraph text.
     """
 
     if json_ld:
@@ -1295,10 +1563,17 @@ def extract_deadline(
         if value:
             return value
 
-    # --------------------------------------------------------
-    # 1. Labelled value — but only trust it if it starts
-    #    like a date (or a known "empty" marker).
-    # --------------------------------------------------------
+    date_pattern = (
+        r"(?:"
+        r"[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}"
+        r"|"
+        r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
+        r"|"
+        r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+        r"|"
+        r"\d{4}-\d{2}-\d{2}"
+        r")"
+    )
 
     value = extract_labeled_value(
         soup,
@@ -1311,16 +1586,23 @@ def extract_deadline(
 
     if value:
 
-        match = DEADLINE_HEAD_RE.match(value)
+        match = re.search(
+            date_pattern,
+            value,
+            flags=re.IGNORECASE,
+        )
 
         if match:
             return clean_text(
                 match.group(0)
             )
 
-    # --------------------------------------------------------
-    # 2. Text scan — bounded match.
-    # --------------------------------------------------------
+        if value.lower() in {
+            "not specified",
+            "open",
+            "rolling",
+        }:
+            return value
 
     text = clean_text(
         soup.get_text(
@@ -1331,18 +1613,19 @@ def extract_deadline(
 
     match = re.search(
         r"\bDeadline\s*:?\s*"
-        r"(Not specified"
+        r"("
+        r"Not specified"
         r"|Open"
         r"|Rolling"
-        r"|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}"
-        r"|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
-        r"|\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
-        r"|\d{4}-\d{2}-\d{2})",
+        r"|"
+        + date_pattern +
+        r")",
         text,
         flags=re.IGNORECASE,
     )
 
     if match:
+
         return clean_text(
             match.group(1)
         )
@@ -1358,6 +1641,16 @@ def extract_salary(
     soup: BeautifulSoup,
     json_ld: Optional[dict],
 ) -> Optional[str]:
+    """
+    Extract the job salary.
+
+    Returns a real salary value when available and rejects
+    MyJobMag salary-widget/navigation text.
+    """
+
+    # --------------------------------------------------------
+    # 1. JSON-LD
+    # --------------------------------------------------------
 
     if json_ld:
 
@@ -1401,9 +1694,10 @@ def extract_salary(
             if value:
                 return value
 
-    # Use only explicitly labelled salary.
-    # Do NOT search the entire page for "KSh" because MyJobMag
-    # places salary widgets for the company elsewhere on the page.
+    # --------------------------------------------------------
+    # 2. Explicit salary metadata
+    # --------------------------------------------------------
+
     value = extract_labeled_value(
         soup,
         [
@@ -1413,44 +1707,63 @@ def extract_salary(
         ],
     )
 
-    if value:
+    value = clean_text(
+        value
+    )
 
-        lower = value.lower()
+    if not value:
+        return None
 
-        if (
-            "salary structure" not in lower
-            and "mysalaryscale" not in lower
-        ):
-            return value
+    lower_value = value.lower()
 
-    return None
+    # --------------------------------------------------------
+    # 3. Reject MyJobMag salary-widget text
+    # --------------------------------------------------------
 
+    invalid_fragments = [
+        "salary structure",
+        "mysalaryscale",
+        "checkout",
+        "employees",
+        "from employees",
+        "view salary",
+        "salary insights",
+    ]
+
+    if any(
+        fragment in lower_value
+        for fragment in invalid_fragments
+    ):
+        return None
+
+    # --------------------------------------------------------
+    # 4. Reject obvious navigation/footer content
+    # --------------------------------------------------------
+
+    invalid_values = {
+        "not specified",
+        "salary",
+        "remuneration",
+        "n/a",
+        "na",
+        "-",
+    }
+
+    if lower_value in invalid_values:
+        return None
+
+    # --------------------------------------------------------
+    # 5. Protect against long paragraph capture
+    # --------------------------------------------------------
+
+    if len(value) > 200:
+        return None
+
+    return value
 
 # ============================================================
 # JOB CONTENT
 # ============================================================
-#
-# MyJobMag does not use semantic <h2>/<h3> tags for section
-# headings on every job page. The most common shape is:
-#
-#     <p><strong>Job Description</strong></p>
-#     <p>...</p>
-#
-#     <p><strong>Key Responsibilities</strong></p>
-#     <ul>...</ul>
-#
-#     <p><strong>Knowledge, Skills and Experience</strong></p>
-#     <ul>...</ul>
-#
-# Sometimes they are <h2>/<h3>, sometimes bolded <p>. We
-# therefore:
-#   1. Detect "heading-like" elements (h2-h6, or a <p>/<div>/
-#      <li> whose only content is a <strong>/<b>).
-#   2. Classify each heading by *keyword* rather than exact
-#      alias so headings like "Knowledge, Skills and
-#      Experience" are correctly identified.
-#   3. Stop a section at the *next heading of any kind*, not
-#      just the next known one.
 
 SECTION_KEYWORDS = {
     "description": [
@@ -1467,6 +1780,7 @@ SECTION_KEYWORDS = {
         "role overview",
         "position overview",
     ],
+
     "responsibilities": [
         "key responsibilities",
         "main responsibilities",
@@ -1481,6 +1795,7 @@ SECTION_KEYWORDS = {
         "key tasks",
         "key accountabilities",
     ],
+
     "requirements": [
         "requirements",
         "requirement",
@@ -1504,84 +1819,108 @@ SECTION_KEYWORDS = {
     ],
 }
 
-_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-_WRAPPER_TAGS = {"p", "div", "li"}
-_BOLD_TAGS = {"strong", "b"}
+
+HEADING_TAGS = {
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+}
 
 
-def _heading_text(el) -> str:
-    """
-    Return the visible text of a heading-like element.
-    """
+WRAPPER_TAGS = {
+    "p",
+    "div",
+    "li",
+}
 
-    name = getattr(el, "name", None)
+
+def heading_text(
+    element,
+) -> str:
+
+    name = getattr(
+        element,
+        "name",
+        None,
+    )
 
     if not name:
         return ""
 
     name = name.lower()
 
-    if name in _WRAPPER_TAGS:
+    if name in WRAPPER_TAGS:
 
-        strong = el.find(["strong", "b"])
+        strong = element.find(
+            ["strong", "b"]
+        )
 
         if strong is not None:
+
             return clean_text(
-                strong.get_text(" ", strip=True)
+                strong.get_text(
+                    " ",
+                    strip=True,
+                )
             )
 
     return clean_text(
-        el.get_text(" ", strip=True)
+        element.get_text(
+            " ",
+            strip=True,
+        )
     )
 
 
-def _is_heading_like(el) -> bool:
-    """
-    True if `el` looks like a section heading.
+def is_heading_like(
+    element,
+) -> bool:
 
-    Accepts:
-        - h1-h6
-        - a <p>/<div>/<li> whose *only* content is a short
-          <strong>/<b> (MyJobMag's most common pattern)
-        - a bare short <strong>/<b>
-    """
-
-    name = getattr(el, "name", None)
+    name = getattr(
+        element,
+        "name",
+        None,
+    )
 
     if not name:
         return False
 
     name = name.lower()
 
-    # --------------------------------------------------------
-    # Real heading tags
-    # --------------------------------------------------------
-
-    if name in _HEADING_TAGS:
+    if name in HEADING_TAGS:
 
         text = clean_text(
-            el.get_text(" ", strip=True)
+            element.get_text(
+                " ",
+                strip=True,
+            )
         )
 
         return 0 < len(text) < 150
 
-    # --------------------------------------------------------
-    # Wrapper whose only content is a bold heading
-    # --------------------------------------------------------
+    if name in WRAPPER_TAGS:
 
-    if name in _WRAPPER_TAGS:
-
-        strong = el.find(["strong", "b"])
+        strong = element.find(
+            ["strong", "b"]
+        )
 
         if strong is None:
             return False
 
         wrapper_text = clean_text(
-            el.get_text(" ", strip=True)
+            element.get_text(
+                " ",
+                strip=True,
+            )
         )
 
         strong_text = clean_text(
-            strong.get_text(" ", strip=True)
+            strong.get_text(
+                " ",
+                strip=True,
+            )
         )
 
         if not strong_text:
@@ -1590,45 +1929,30 @@ def _is_heading_like(el) -> bool:
         if len(strong_text) >= 150:
             return False
 
-        # The wrapper must contain *only* the bold text.
-        if wrapper_text != strong_text:
-            return False
-
-        return True
-
-    # --------------------------------------------------------
-    # Bare bold text acting as a heading
-    # --------------------------------------------------------
-
-    if name in _BOLD_TAGS:
-
-        text = clean_text(
-            el.get_text(" ", strip=True)
+        return (
+            wrapper_text
+            == strong_text
         )
-
-        return 0 < len(text) < 150
 
     return False
 
 
-def _heading_matches_keywords(
-    heading_text: str,
+def heading_matches(
+    text: str,
     keywords: List[str],
 ) -> bool:
-    """
-    True if the heading text contains one of the keywords.
-    """
 
-    heading_text = heading_text.lower().strip(": -")
+    text = clean_text(
+        text
+    ).lower().strip(
+        ": -"
+    )
 
-    if not heading_text:
-        return False
-
-    if len(heading_text) > 150:
+    if not text:
         return False
 
     return any(
-        keyword in heading_text
+        keyword in text
         for keyword in keywords
     )
 
@@ -1638,12 +1962,15 @@ def extract_section_by_heading(
     keywords: List[str],
 ) -> str:
     """
-    Extract content belonging to a section heading.
+    Extract text belonging to a section heading.
 
-    The heading is identified by keyword, and the section ends
-    at the next heading-like element (of any kind). This makes
-    the extractor resilient to headings the module does not
-    explicitly know about (e.g. "How to Apply").
+    Supports:
+        - h2/h3/h4/h5/h6 headings
+        - bold/strong paragraph headings
+        - nested content containers
+        - sibling paragraphs/divs/lists
+
+    Stops when another heading-like section is reached.
     """
 
     candidates = soup.find_all(
@@ -1657,25 +1984,28 @@ def extract_section_by_heading(
             "p",
             "div",
             "li",
-            "strong",
-            "b",
         ]
     )
 
     target = None
 
-    for el in candidates:
+    # --------------------------------------------------------
+    # Find matching heading
+    # --------------------------------------------------------
 
-        if not _is_heading_like(el):
+    for element in candidates:
+
+        if not is_heading_like(element):
             continue
 
-        text = _heading_text(el)
+        text = heading_text(element)
 
-        if _heading_matches_keywords(
+        if heading_matches(
             text,
             keywords,
         ):
-            target = el
+
+            target = element
             break
 
     if target is None:
@@ -1683,12 +2013,22 @@ def extract_section_by_heading(
 
     collected = []
 
+    # --------------------------------------------------------
+    # First inspect direct siblings
+    # --------------------------------------------------------
+
     for sibling in target.next_siblings:
 
-        # Stop at the next heading of any kind.
+        name = getattr(
+            sibling,
+            "name",
+            None,
+        )
+
+        # Stop at the next heading
         if (
-            getattr(sibling, "name", None)
-            and _is_heading_like(sibling)
+            name
+            and is_heading_like(sibling)
         ):
             break
 
@@ -1696,13 +2036,16 @@ def extract_section_by_heading(
             sibling,
             "get_text",
         ):
+
             text = clean_text(
                 sibling.get_text(
                     " ",
                     strip=True,
                 )
             )
+
         else:
+
             text = clean_text(
                 str(sibling)
             )
@@ -1710,18 +2053,117 @@ def extract_section_by_heading(
         if text:
             collected.append(text)
 
-    return clean_text(
+    direct_text = clean_text(
         " ".join(collected)
     )
 
+    if direct_text:
+        return direct_text
+
+    # --------------------------------------------------------
+    # Nested-container fallback
+    # --------------------------------------------------------
+
+    parent = target.parent
+
+    if parent:
+
+        collected = []
+
+        for element in parent.find_all(
+            recursive=False
+        ):
+
+            if element is target:
+                continue
+
+            if is_heading_like(element):
+
+                heading = heading_text(
+                    element
+                )
+
+                if heading_matches(
+                    heading,
+                    keywords,
+                ):
+                    continue
+
+                # Another section begins.
+                break
+
+            text = clean_text(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if text:
+                collected.append(text)
+
+        nested_text = clean_text(
+            " ".join(collected)
+        )
+
+        if nested_text:
+            return nested_text
+
+    # --------------------------------------------------------
+    # Parent-container fallback
+    # --------------------------------------------------------
+
+    container = target.parent
+
+    if container:
+
+        text_parts = []
+
+        for element in container.find_all(
+            [
+                "p",
+                "li",
+                "div",
+            ]
+        ):
+
+            if element is target:
+                continue
+
+            text = clean_text(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if not text:
+                continue
+
+            if len(text) > 3000:
+                continue
+
+            text_parts.append(text)
+
+        fallback_text = unique_preserve_order(
+            text_parts
+        )
+
+        if fallback_text:
+
+            return clean_text(
+                " ".join(
+                    fallback_text
+                )
+            )
+
+    return ""
 
 def find_main_content_container(
     soup: BeautifulSoup,
 ):
     """
-    Find the most likely MyJobMag job-content container.
-
-    We deliberately prefer semantic containers instead of body.
+    Find the smallest meaningful job content container.
     """
 
     selectors = [
@@ -1731,8 +2173,8 @@ def find_main_content_container(
         ".job-details",
         ".job-description",
         ".job-detail",
-        ".details",
         ".job-content",
+        ".details",
     ]
 
     candidates = []
@@ -1750,7 +2192,8 @@ def find_main_content_container(
                 )
             )
 
-            if len(text) >= 300:
+            if 300 <= len(text) <= 15000:
+
                 candidates.append(
                     (
                         len(text),
@@ -1760,7 +2203,6 @@ def find_main_content_container(
 
     if candidates:
 
-        # Choose the smallest meaningful container.
         candidates.sort(
             key=lambda item: item[0]
         )
@@ -1769,7 +2211,6 @@ def find_main_content_container(
 
     return soup.body
 
-
 def extract_job_content(
     soup: BeautifulSoup,
     json_ld: Optional[dict],
@@ -1777,8 +2218,8 @@ def extract_job_content(
     """
     Extract description, responsibilities and requirements.
 
-    JSON-LD description is used as a fallback, not as the
-    primary source for the individual sections.
+    Uses section-heading extraction first, then JSON-LD and
+    main-container fallbacks.
     """
 
     content = {
@@ -1788,47 +2229,52 @@ def extract_job_content(
     }
 
     # --------------------------------------------------------
-    # Individual sections
+    # 1. Find sections using headings
     # --------------------------------------------------------
 
     for key, keywords in SECTION_KEYWORDS.items():
 
-        content[key] = extract_section_by_heading(
+        value = extract_section_by_heading(
             soup,
             keywords,
         )
 
+        if value:
+            content[key] = clean_text(
+                value
+            )
+
     # --------------------------------------------------------
-    # JSON-LD fallback
+    # 2. JSON-LD description fallback
     # --------------------------------------------------------
 
     if not content["description"] and json_ld:
 
         description = clean_text(
             json_ld.get(
-                "description"
+                "description",
+                "",
             )
         )
 
         if description:
-            content["description"] = (
-                description
-            )
+            content["description"] = description
 
     # --------------------------------------------------------
-    # If there is no separate description section,
-    # use the meaningful job content container.
+    # 3. Main content container fallback
     # --------------------------------------------------------
 
-    if not content["description"]:
+    container = find_main_content_container(
+        soup
+    )
 
-        container = (
-            find_main_content_container(
-                soup
-            )
-        )
+    if container:
 
-        if container:
+        # -----------------------------------------------
+        # Description fallback
+        # -----------------------------------------------
+
+        if not content["description"]:
 
             text = clean_text(
                 container.get_text(
@@ -1837,16 +2283,122 @@ def extract_job_content(
                 )
             )
 
-            # Avoid returning the whole page if the container
-            # is clearly enormous.
             if 100 <= len(text) <= 15000:
+
                 content["description"] = text
+
+        # -----------------------------------------------
+        # Section fallback inside the container
+        # -----------------------------------------------
+
+        for key, keywords in SECTION_KEYWORDS.items():
+
+            if content[key]:
+                continue
+
+            candidates = container.find_all(
+                [
+                    "h2",
+                    "h3",
+                    "h4",
+                    "h5",
+                    "h6",
+                    "p",
+                    "div",
+                    "li",
+                ]
+            )
+
+            for element in candidates:
+
+                if not is_heading_like(
+                    element
+                ):
+                    continue
+
+                heading = heading_text(
+                    element
+                )
+
+                if not heading_matches(
+                    heading,
+                    keywords,
+                ):
+                    continue
+
+                collected = []
+
+                # ---------------------------------------
+                # First try following siblings
+                # ---------------------------------------
+
+                for sibling in element.next_siblings:
+
+                    if (
+                        getattr(
+                            sibling,
+                            "name",
+                            None,
+                        )
+                        and is_heading_like(
+                            sibling
+                        )
+                    ):
+                        break
+
+                    if hasattr(
+                        sibling,
+                        "get_text",
+                    ):
+
+                        text = clean_text(
+                            sibling.get_text(
+                                " ",
+                                strip=True,
+                            )
+                        )
+
+                    else:
+
+                        text = clean_text(
+                            str(sibling)
+                        )
+
+                    if text:
+                        collected.append(
+                            text
+                        )
+
+                value = clean_text(
+                    " ".join(
+                        collected
+                    )
+                )
+
+                if value:
+                    content[key] = value
+                    break
+
+    # --------------------------------------------------------
+    # 4. Prevent duplicate full-page content
+    # --------------------------------------------------------
+
+    for key in content:
+
+        value = clean_text(
+            content[key]
+        )
+
+        if len(value) > 15000:
+            value = value[:15000]
+
+        content[key] = value
 
     return content
 
 
 # ============================================================
-# SKILL EXTRACTION
+# SKILLS
 # ============================================================
 
 SKILL_PATTERNS = [
@@ -1879,7 +2431,7 @@ SKILL_PATTERNS = [
     ("Kubernetes", r"\bkubernetes\b"),
     ("AWS", r"\baws\b"),
     ("Azure", r"\bazure\b"),
-    ("GCP", r"\bgoogle cloud\b|\bgcp\b"),
+    ("GCP", r"\b(?:google cloud|gcp)\b"),
     ("Power BI", r"\bpower\s+bi\b"),
     ("Machine Learning", r"\bmachine learning\b"),
     ("Artificial Intelligence", r"\bartificial intelligence\b"),
@@ -1900,10 +2452,11 @@ def extract_skills(
     text: str,
 ) -> List[str]:
     """
-    Detect known technical skills from the actual job
-    description/content.
+    Extract known technical skills from job text.
 
-    Returns skills in a stable order.
+    Uses the existing SKILL_PATTERNS definitions while
+    protecting against false positives from very short or
+    generic terms.
     """
 
     text = clean_text(
@@ -1917,20 +2470,49 @@ def extract_skills(
 
     for skill, pattern in SKILL_PATTERNS:
 
+        # ----------------------------------------------------
+        # Avoid extremely short generic skills being detected
+        # from unrelated text.
+        # ----------------------------------------------------
+
+        if skill == "AI":
+
+            if re.search(
+                r"\bAI\b",
+                text,
+                flags=re.IGNORECASE,
+            ):
+                skills.append(skill)
+
+            continue
+
+        if skill == "R":
+
+            if re.search(
+                r"(?<![A-Za-z])R(?![A-Za-z])",
+                text,
+            ):
+                skills.append(skill)
+
+            continue
+
+        # ----------------------------------------------------
+        # Normal skill matching
+        # ----------------------------------------------------
+
         if re.search(
             pattern,
             text,
             flags=re.IGNORECASE,
         ):
-            skills.append(
-                skill
-            )
+            skills.append(skill)
 
-    return skills
-
+    return unique_preserve_order(
+        skills
+    )
 
 # ============================================================
-# APPLICATION INFORMATION
+# APPLICATION DETECTION
 # ============================================================
 
 def is_myjobmag_apply_url(
@@ -1940,9 +2522,19 @@ def is_myjobmag_apply_url(
     if not url:
         return False
 
+    parsed = urlparse(
+        url
+    )
+
     return (
-        "myjobmag.co.ke/apply-now/"
-        in url.lower()
+        parsed.netloc.lower()
+        in {
+            "www.myjobmag.co.ke",
+            "myjobmag.co.ke",
+        }
+        and parsed.path.lower().startswith(
+            "/apply-now/"
+        )
     )
 
 
@@ -1964,41 +2556,44 @@ def is_external_application_url(
     if not hostname:
         return False
 
-    return (
-        "myjobmag.co.ke"
-        not in hostname
-    )
-
+    return hostname not in {
+        "www.myjobmag.co.ke",
+        "myjobmag.co.ke",
+    }
 
 def detect_application(
+    page,
     soup: BeautifulSoup,
     page_url: str,
 ) -> Dict:
     """
-    Detect the application method without submitting anything.
+    Detect the actual application method and destination.
 
-    MyJobMag commonly exposes an /apply-now/ intermediary page.
-    External employer URLs are also collected where visible.
+    MyJobMag may expose an /apply-now/<id> intermediary URL.
+    A separate temporary Playwright page is used to follow that
+    URL so the original job page remains untouched.
+
+    No application is submitted.
     """
 
     application_url = ""
+    myjobmag_url = ""
     external_urls = []
     application_links = []
 
-    for anchor in soup.select(
-        "a[href]"
-    ):
+    # --------------------------------------------------------
+    # Find MyJobMag application URL
+    # --------------------------------------------------------
 
-        href = anchor.get(
-            "href"
-        )
+    for anchor in soup.select("a[href]"):
+
+        href = anchor.get("href")
 
         if not href:
             continue
 
-        href = normalize_url(
-            href
-        )
+        href = normalize_url(href)
+        href = strip_url_query(href)
 
         text = clean_text(
             anchor.get_text(
@@ -2007,19 +2602,9 @@ def detect_application(
             )
         )
 
-        lower_text = text.lower()
-        lower_href = href.lower()
+        if is_myjobmag_apply_url(href):
 
-        # ----------------------------------------------------
-        # MyJobMag application URL
-        # ----------------------------------------------------
-
-        if is_myjobmag_apply_url(
-            href
-        ):
-
-            if not application_url:
-                application_url = href
+            myjobmag_url = href
 
             application_links.append(
                 {
@@ -2028,77 +2613,118 @@ def detect_application(
                 }
             )
 
-            continue
+            break
 
-        # ----------------------------------------------------
-        # Explicit application language
-        # ----------------------------------------------------
+    # --------------------------------------------------------
+    # Follow MyJobMag application redirect
+    # using a separate temporary page
+    # --------------------------------------------------------
 
-        application_words = [
-            "apply",
-            "application",
-            "apply now",
-            "go to",
-            "interested and qualified",
-            "method of application",
-        ]
+    if myjobmag_url:
 
-        looks_like_application = (
-            any(
-                word in lower_text
-                for word in application_words
-            )
-            or "apply" in lower_href
-            or "careers" in lower_href
-            or "taleo" in lower_href
-            or "workday" in lower_href
-            or "greenhouse" in lower_href
+        print()
+        print(
+            "Following MyJobMag application redirect..."
         )
 
-        if (
-            looks_like_application
-            and is_external_application_url(
-                href
-            )
-        ):
+        temp_page = None
 
-            if href not in external_urls:
+        try:
+
+            temp_page = page.context.new_page()
+
+            temp_page.goto(
+                myjobmag_url,
+                wait_until="domcontentloaded",
+                timeout=PAGE_TIMEOUT,
+            )
+
+            try:
+
+                temp_page.wait_for_load_state(
+                    "networkidle",
+                    timeout=10000,
+                )
+
+            except Exception:
+
+                pass
+
+            final_url = clean_text(
+                temp_page.url
+            )
+
+            # ------------------------------------------------
+            # Detect external destination
+            # ------------------------------------------------
+
+            if (
+                final_url
+                and is_external_application_url(
+                    final_url
+                )
+            ):
+
+                final_url = strip_url_query(
+                    final_url
+                )
+
                 external_urls.append(
-                    href
+                    final_url
                 )
 
                 application_links.append(
                     {
-                        "text": text,
-                        "url": href,
+                        "text": "External application",
+                        "url": final_url,
                     }
                 )
 
+        except Exception as error:
+
+            print(
+                "Could not follow application redirect:"
+            )
+
+            print(
+                f"  {error}"
+            )
+
+        finally:
+
+            if temp_page:
+
+                try:
+                    temp_page.close()
+                except Exception:
+                    pass
+
     # --------------------------------------------------------
-    # Determine primary application URL
+    # Determine primary application method
     # --------------------------------------------------------
 
-    if application_url:
-
-        method = "myjobmag"
-
-    elif external_urls:
-
-        application_url = external_urls[0]
+    if external_urls:
 
         method = "external"
+        primary_url = external_urls[0]
+
+    elif myjobmag_url:
+
+        method = "myjobmag"
+        primary_url = myjobmag_url
 
     else:
 
         method = "unknown"
+        primary_url = ""
 
     return {
         "method": method,
-        "url": application_url,
+        "url": primary_url,
+        "myjobmag_url": myjobmag_url,
         "external_urls": external_urls,
         "links": application_links,
     }
-
 
 # ============================================================
 # NAVIGATION
@@ -2109,7 +2735,7 @@ def navigate(
     url: str,
 ):
     """
-    Navigate to a URL and wait for the page to settle.
+    Navigate the supplied Playwright Page.
     """
 
     response = page.goto(
@@ -2119,13 +2745,14 @@ def navigate(
     )
 
     try:
+
         page.wait_for_load_state(
             "networkidle",
             timeout=10000,
         )
+
     except Exception:
-        # Some pages never reach networkidle because of
-        # analytics or advertising requests.
+
         pass
 
     return response
@@ -2136,399 +2763,379 @@ def navigate(
 # ============================================================
 
 def inspect_job(
-    context,
+    page,
     url: str,
     fallback_title: str = "",
 ) -> Dict:
     """
-    Inspect a MyJobMag job page and return structured data.
+    Inspect a MyJobMag job page.
+
+    IMPORTANT:
+        `page` must be a Playwright Page.
+
+    The automation pipeline already owns the page,
+    so this function does NOT call context.new_page().
     """
 
-    page = context.new_page()
+    print()
+    print("=" * 60)
+    print("INSPECTING MYJOBMAG JOB")
+    print("=" * 60)
+    print()
 
-    try:
+    print(
+        f"URL: {url}"
+    )
 
-        print()
-        print(
-            "=" * 60
-        )
-        print(
-            "INSPECTING MYJOBMAG JOB"
-        )
-        print(
-            "=" * 60
-        )
-        print()
-        print(
-            f"URL: {url}"
-        )
+    response = navigate(
+        page,
+        url,
+    )
 
-        response = navigate(
-            page,
-            url,
-        )
+    print(
+        "Job navigation started."
+    )
 
-        print(
-            "Job navigation started."
-        )
-        print(
-            "Job page loaded."
-        )
+    print(
+        "Job page loaded."
+    )
 
-        if response:
+    if response:
+
+        try:
+
             print(
                 f"Status: {response.status}"
             )
 
-        try:
-            print(
-                f"Page title: {page.title()}"
-            )
         except Exception:
+
             pass
 
-        # ----------------------------------------------------
-        # Obtain HTML
-        # ----------------------------------------------------
+    try:
 
-        html = get_page_html(
-            page
+        print(
+            f"Page title: {page.title()}"
         )
 
-        soup = BeautifulSoup(
-            html,
-            "html.parser",
+    except Exception:
+
+        pass
+
+    # --------------------------------------------------------
+    # HTML
+    # --------------------------------------------------------
+
+    html = get_page_html(
+        page
+    )
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser",
+    )
+
+    # --------------------------------------------------------
+    # JSON-LD
+    # --------------------------------------------------------
+
+    json_ld = (
+        get_job_posting_json_ld(
+            soup
+        )
+    )
+
+    if json_ld:
+
+        print(
+            "JSON-LD JobPosting found."
         )
 
-        # ----------------------------------------------------
-        # JSON-LD
-        # ----------------------------------------------------
+    else:
 
-        json_ld = (
-            get_job_posting_json_ld(
-                soup
-            )
+        print(
+            "No JSON-LD JobPosting found. "
+            "Using DOM/container extraction."
         )
 
-        if json_ld:
+    # --------------------------------------------------------
+    # Core metadata
+    # --------------------------------------------------------
 
-            print(
-                "JSON-LD JobPosting found."
-            )
+    title = extract_title(
+        soup,
+        json_ld,
+        fallback_title,
+    )
 
-        else:
+    company = extract_company(
+        soup,
+        json_ld,
+        title,
+    )
 
-            print(
-                "No JSON-LD JobPosting found. "
-                "Using DOM/container extraction."
-            )
+    location = extract_location(
+        soup,
+        json_ld,
+    )
 
-        # ----------------------------------------------------
-        # Title
-        # ----------------------------------------------------
+    job_type = extract_job_type(
+        soup,
+        json_ld,
+    )
 
-        title = extract_title(
-            soup,
-            json_ld,
-            fallback_title,
-        )
+    qualification = extract_qualification(
+        soup
+    )
 
-        # ----------------------------------------------------
-        # Company
-        # ----------------------------------------------------
+    experience = extract_experience(
+        soup
+    )
 
-        company = extract_company(
-            soup,
-            json_ld,
+    job_field = extract_job_field(
+        soup
+    )
+
+    posted = extract_posted(
+        soup,
+        json_ld,
+    )
+
+    deadline = extract_deadline(
+        soup,
+        json_ld,
+    )
+
+    salary = extract_salary(
+        soup,
+        json_ld,
+    )
+
+    # --------------------------------------------------------
+    # Content
+    # --------------------------------------------------------
+
+    content = extract_job_content(
+        soup,
+        json_ld,
+    )
+
+    description = content.get(
+        "description",
+        "",
+    )
+
+    responsibilities = content.get(
+        "responsibilities",
+        "",
+    )
+
+    requirements = content.get(
+        "requirements",
+        "",
+    )
+
+    # --------------------------------------------------------
+    # Skills
+    # --------------------------------------------------------
+
+    skill_text = " ".join(
+        [
             title,
-        )
+            description,
+            responsibilities,
+            requirements,
+        ]
+    )
 
-        # ----------------------------------------------------
-        # Location
-        # ----------------------------------------------------
+    skills = extract_skills(
+        skill_text
+    )
 
-        location = extract_location(
-            soup,
-            json_ld,
-        )
+    # --------------------------------------------------------
+    # Application
+    # --------------------------------------------------------
 
-        # ----------------------------------------------------
-        # Metadata
-        # ----------------------------------------------------
+    application = detect_application(
+        page,
+        soup,
+        url,
+    )
 
-        job_type = extract_job_type(
-            soup,
-            json_ld,
-        )
+    # --------------------------------------------------------
+    # Final structured result
+    # --------------------------------------------------------
 
-        qualification = extract_qualification(
-            soup
-        )
-
-        experience = extract_experience(
-            soup
-        )
-
-        posted = extract_posted(
-            soup,
-            json_ld,
-        )
-
-        deadline = extract_deadline(
-            soup,
-            json_ld,
-        )
-
-        salary = extract_salary(
-            soup,
-            json_ld,
-        )
-
-        # ----------------------------------------------------
-        # Job content
-        # ----------------------------------------------------
-
-        content = extract_job_content(
-            soup,
-            json_ld,
-        )
-
-        description = content.get(
-            "description",
+    job = {
+        "title": title,
+        "company": company,
+        "location": location,
+        "job_type": job_type,
+        "qualification": qualification,
+        "experience": experience,
+        "job_field": job_field,
+        "posted": posted,
+        "deadline": deadline,
+        "salary": salary,
+        "description": description,
+        "responsibilities": responsibilities,
+        "requirements": requirements,
+        "skills": skills,
+        "url": url,
+        "application": application,
+        "application_method": application.get(
+            "method",
+            "unknown",
+        ),
+        "application_url": application.get(
+            "url",
             "",
-        )
+        ),
+    }
 
-        responsibilities = content.get(
-            "responsibilities",
-            "",
-        )
+    # --------------------------------------------------------
+    # Output
+    # --------------------------------------------------------
 
-        requirements = content.get(
-            "requirements",
-            "",
-        )
+    print()
+    print("=" * 60)
+    print("EXTRACTED JOB")
+    print("=" * 60)
 
-        # ----------------------------------------------------
-        # Skills
-        # ----------------------------------------------------
+    print(
+        f"Title: {job['title']}"
+    )
 
-        skill_text = " ".join(
-            [
-                description,
-                responsibilities,
-                requirements,
-            ]
-        )
+    print(
+        f"Company: "
+        f"{job['company'] or 'Not found'}"
+    )
 
-        skills = extract_skills(
-            skill_text
-        )
+    print(
+        f"Location: "
+        f"{job['location'] or 'Not specified'}"
+    )
 
-        # ----------------------------------------------------
-        # Application
-        # ----------------------------------------------------
+    print(
+        f"Job type: "
+        f"{job['job_type'] or 'Not specified'}"
+    )
 
-        application = detect_application(
-            soup,
-            url,
-        )
+    print(
+        f"Qualification: "
+        f"{job['qualification'] or 'Not specified'}"
+    )
 
-        # ----------------------------------------------------
-        # Build result
-        # ----------------------------------------------------
+    print(
+        f"Experience: "
+        f"{job['experience'] or 'Not specified'}"
+    )
 
-        job = {
-            "title": title,
-            "company": company,
-            "location": location,
-            "job_type": job_type,
-            "qualification": qualification,
-            "experience": experience,
-            "job_field": extract_labeled_value(
-                soup,
-                [
-                    "job field",
-                    "field",
-                    "job category",
-                ],
-            ),
-            "posted": posted,
-            "deadline": deadline,
-            "salary": salary,
-            "description": description,
-            "responsibilities": responsibilities,
-            "requirements": requirements,
-            "skills": skills,
-            "url": url,
-            "application": application,
-            "application_method": application.get(
-                "method",
-                "unknown",
-            ),
-            "application_url": application.get(
-                "url",
-                "",
-            ),
-        }
+    print(
+        f"Job field: "
+        f"{job['job_field'] or 'Not specified'}"
+    )
 
-        # ----------------------------------------------------
-        # Print result
-        # ----------------------------------------------------
+    print(
+        f"Posted: "
+        f"{job['posted'] or 'Not specified'}"
+    )
 
-        print()
-        print(
-            "=" * 60
-        )
-        print(
-            "EXTRACTED JOB"
-        )
-        print(
-            "=" * 60
-        )
+    print(
+        f"Deadline: "
+        f"{job['deadline'] or 'Not specified'}"
+    )
 
-        print(
-            f"Title: {job['title']}"
-        )
-        print(
-            f"Company: {job['company'] or 'Not found'}"
-        )
-        print(
-            f"Location: {job['location'] or 'Not specified'}"
-        )
-        print(
-            f"Job type: {job['job_type'] or 'Not specified'}"
-        )
-        print(
-            f"Qualification: "
-            f"{job['qualification'] or 'Not specified'}"
-        )
-        print(
-            f"Experience: "
-            f"{job['experience'] or 'Not specified'}"
-        )
-        print(
-            f"Job field: "
-            f"{job['job_field'] or 'Not specified'}"
-        )
-        print(
-            f"Posted: "
-            f"{job['posted'] or 'Not specified'}"
-        )
-        print(
-            f"Deadline: "
-            f"{job['deadline'] or 'Not specified'}"
-        )
-        print(
-            f"Salary: "
-            f"{job['salary'] or 'Not specified'}"
-        )
+    print(
+        f"Salary: "
+        f"{job['salary'] or 'Not specified'}"
+    )
 
-        print(
-            f"Description length: "
-            f"{len(job['description'])}"
-        )
+    print(
+        f"Description length: "
+        f"{len(job['description'])}"
+    )
 
-        print(
-            f"Responsibilities length: "
-            f"{len(job['responsibilities'])}"
-        )
+    print(
+        f"Responsibilities length: "
+        f"{len(job['responsibilities'])}"
+    )
 
-        print(
-            f"Requirements length: "
-            f"{len(job['requirements'])}"
-        )
+    print(
+        f"Requirements length: "
+        f"{len(job['requirements'])}"
+    )
 
-        print(
-            "Skills: "
-            + (
-                ", ".join(
-                    job["skills"]
-                )
-                if job["skills"]
-                else "None detected"
+    print(
+        "Skills: "
+        + (
+            ", ".join(
+                job["skills"]
             )
+            if job["skills"]
+            else "None detected"
+        )
+    )
+
+    # --------------------------------------------------------
+    # Application
+    # --------------------------------------------------------
+
+    print()
+    print("APPLICATION")
+    print("-" * 60)
+
+    print(
+        f"Method: "
+        f"{application.get('method', 'unknown')}"
+    )
+
+    if application.get(
+        "url"
+    ):
+
+        print(
+            f"URL: "
+            f"{application['url']}"
         )
 
-        # ----------------------------------------------------
-        # Application output
-        # ----------------------------------------------------
+    links = application.get(
+        "links",
+        [],
+    )
+
+    if links:
 
         print()
         print(
-            "APPLICATION"
+            "APPLICATION-RELATED LINKS"
         )
+
         print(
             "-" * 60
         )
 
-        print(
-            f"Method: "
-            f"{application.get('method', 'unknown')}"
-        )
+        for link in links:
 
-        if application.get(
-            "url"
-        ):
-
-            print(
-                f"URL: "
-                f"{application['url']}"
+            text = (
+                link.get("text")
+                or "Application link"
             )
 
-        # ----------------------------------------------------
-        # Application-related links
-        # ----------------------------------------------------
-
-        links = application.get(
-            "links",
-            [],
-        )
-
-        if links:
-
-            print()
             print(
-                "APPLICATION-RELATED LINKS"
-            )
-            print(
-                "-" * 60
+                f"• {text}"
             )
 
-            for link in links:
+            print(
+                f"  {link.get('url', '')}"
+            )
 
-                text = (
-                    link.get(
-                        "text"
-                    )
-                    or "Application link"
-                )
+    print()
+    print("=" * 60)
+    print("INSPECTION COMPLETE")
+    print("=" * 60)
 
-                print(
-                    f"• {text}"
-                )
-                print(
-                    f"  {link.get('url', '')}"
-                )
-
-        print()
-        print(
-            "=" * 60
-        )
-        print(
-            "INSPECTION COMPLETE"
-        )
-        print(
-            "=" * 60
-        )
-
-        return job
-
-    finally:
-
-        try:
-            page.close()
-        except Exception:
-            pass
+    return job
 
 
 # ============================================================
@@ -2543,6 +3150,7 @@ def main():
     playwright = None
     browser = None
     context = None
+    page = None
 
     try:
 
@@ -2550,14 +3158,16 @@ def main():
         # Launch browser
         # ----------------------------------------------------
 
-        playwright, browser, context = (
-            launch_browser(
-                headless=HEADLESS
-            )
+        (
+            playwright,
+            browser,
+            context,
+        ) = launch_browser(
+            headless=HEADLESS
         )
 
         # ----------------------------------------------------
-        # Open MyJobMag listing
+        # Open listing page
         # ----------------------------------------------------
 
         print()
@@ -2577,15 +3187,25 @@ def main():
         )
 
         if response:
-            print(
-                f"Status: {response.status}"
-            )
+
+            try:
+
+                print(
+                    f"Status: {response.status}"
+                )
+
+            except Exception:
+
+                pass
 
         try:
+
             print(
                 f"Title: {page.title()}"
             )
+
         except Exception:
+
             pass
 
         # ----------------------------------------------------
@@ -2595,8 +3215,6 @@ def main():
         jobs = collect_job_links(
             page
         )
-
-        page.close()
 
         # ----------------------------------------------------
         # Test first job
@@ -2612,18 +3230,12 @@ def main():
             return
 
         print()
-        print(
-            "=" * 60
-        )
-        print(
-            "TESTING FIRST JOB"
-        )
-        print(
-            "=" * 60
-        )
+        print("=" * 60)
+        print("TESTING FIRST JOB")
+        print("=" * 60)
 
         inspect_job(
-            context,
+            page,
             jobs[0]["url"],
             jobs[0]["title"],
         )
@@ -2631,21 +3243,22 @@ def main():
     except Exception as error:
 
         print()
-        print(
-            "=" * 60
-        )
-        print(
-            "ERROR"
-        )
-        print(
-            "=" * 60
-        )
+        print("=" * 60)
+        print("ERROR")
+        print("=" * 60)
 
         print(
             str(error)
         )
 
     finally:
+
+        if page:
+
+            try:
+                page.close()
+            except Exception:
+                pass
 
         if browser and playwright:
 
@@ -2666,3 +3279,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
