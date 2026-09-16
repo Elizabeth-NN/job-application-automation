@@ -403,60 +403,107 @@ def extract_company(page, jsonld=None):
 
 def _get_facts_strip_text(page):
     """
-    Locate the small text block that contains the "Min Qualification: ...
-    Applicant Location: ..." facts strip, without pulling in the rest of
-    the page (nav, similar-jobs, footer, filters, etc. can all contain
-    stray words like "Location" and would otherwise cause false matches).
+    Extract the complete BrighterMonday facts strip.
+
+    The facts strip contains individual items such as:
+        Min Qualification: Bachelors
+        Language Requirement: English
+        Working Hours: Full Time - 8 to 5
+        Applicant Location: Kenya
+
+    BrighterMonday renders each fact as a separate <span>, so selecting
+    the text "Min Qualification:" directly only returns that one item.
+    We therefore locate the label and move up to the shared container.
     """
 
-    # 1. Specific selector: the element that actually contains the
-    #    "Min Qualification" label. Playwright's text engine returns the
-    #    smallest matching element, which is normally just this one line.
+    # 1. Locate the "Min Qualification:" label.
     try:
-        locator = page.locator("text=/Min Qualification\\s*:/i").first
-        if locator.count():
-            text = clean_text(locator.inner_text(timeout=3000))
+        label = page.locator(
+            "text=/Min Qualification\\s*:/i"
+        ).first
+
+        if label.count():
+            # The label is inside:
+            #
+            # <span class="fact-item">
+            #     ...
+            #     <span>Min Qualification:</span>
+            #     <span>Bachelors</span>
+            # </span>
+            #
+            # Its parent is the individual fact item.
+            # The parent's parent is the complete facts-strip container.
+
+            fact_item = label.locator("xpath=..")
+
+            container = fact_item.locator("xpath=..")
+
+            text = clean_text(
+                container.inner_text(timeout=3000)
+            )
+
             if text and "Min Qualification" in text:
                 return text
+
     except Exception:
         pass
 
-    # 2. Alternative selector: some templates wrap the strip in a
-    #    dedicated summary/details container instead of a bare text node.
+    # 2. Alternative: locate the known facts-strip container by its
+    #    structure/classes.
     for selector in (
+        "div.flex.mt-6.flex-col.md\\:flex-row.md\\:flex-wrap.gap-6",
         "[class*='job-summary']",
         "[class*='jobSummary']",
         "[class*='job-details']",
-        "[class*='details']",
     ):
         try:
             locator = page.locator(selector).first
+
             if locator.count():
-                text = clean_text(locator.inner_text(timeout=3000))
-                if "Min Qualification" in text or "Experience Level" in text:
+                text = clean_text(
+                    locator.inner_text(timeout=3000)
+                )
+
+                if (
+                    "Min Qualification" in text
+                    or "Experience Level" in text
+                    or "Applicant Location" in text
+                ):
                     return text
+
         except Exception:
             continue
 
-    # 3. Last resort: scan the full body text but only keep a narrow
-    #    window starting at "Min Qualification" so unrelated page content
-    #    can't leak into the parsed fields.
+    # 3. Last resort: scan body text, but only extract a narrow
+    #    window beginning at "Min Qualification".
     try:
-        body_text = clean_text(page.locator("body").inner_text(timeout=5000))
+        body_text = clean_text(
+            page.locator("body").inner_text(timeout=5000)
+        )
     except Exception:
         body_text = ""
 
-    match = re.search(r"Min Qualification\s*:.*", body_text, re.IGNORECASE)
+    match = re.search(
+        r"Min Qualification\s*:.*",
+        body_text,
+        re.IGNORECASE,
+    )
+
     if match:
-        # Cut off well before any subsequent, unrelated page section.
-        window = match.group(0)[:400]
-        cutoff = re.search(r"Job descriptions?|Important safety tips", window, re.IGNORECASE)
+        window = match.group(0)[:500]
+
+        cutoff = re.search(
+            r"Job descriptions?|Important safety tips",
+            window,
+            re.IGNORECASE,
+        )
+
         if cutoff:
-            window = window[: cutoff.start()]
+            window = window[:cutoff.start()]
+
         return clean_text(window)
 
     return ""
-
 
 def _parse_facts_strip(text):
     """Split the facts strip into a {label: value} dict."""
@@ -477,82 +524,131 @@ def _parse_facts_strip(text):
     return facts
 
 
+
 def extract_experience_from_description(description):
     """
-    Fallback when no structured "Experience Length" field is present:
-    look for an explicit years-of-experience requirement in the job
-    description/requirements text.
+    Fallback when no structured "Experience Length" field is present.
 
-    Returns a normalized "N+ years" string when a clean number is found.
-    If experience is clearly discussed but no clean number can be pulled
-    out, the original sentence is preserved instead of fabricating a
-    value.
+    Extracts an explicit years-of-experience requirement from the job
+    description. It only returns a value when a numeric experience
+    requirement is actually stated.
 
-    Recruiter/agency-posted listings often open with the agency's own
-    pitch ("HR Box Africa has over 20 years of experience placing top
-    talent..."), which otherwise gets mistaken for the job's experience
-    requirement. Matches whose immediate preceding context reads like
-    that kind of self-description are skipped in favor of a later match
-    that actually describes what the candidate needs.
+    Examples:
+        "3 years of experience"       -> "3+ years"
+        "3+ years experience"         -> "3+ years"
+        "at least 5 years of experience" -> "5+ years"
+        "minimum 2 years experience"  -> "2+ years"
+
+    It deliberately ignores phrases such as:
+        "Experience with Python"
+        "Experience in analytics"
+        "10 years in the industry"
+
+    because these do not necessarily describe the candidate's required
+    years of experience.
     """
 
     if not description:
         return None
 
+    # Phrases that commonly describe the employer, recruiter, agency,
+    # company, or team rather than the candidate.
     disqualifying_context = [
-        "founded", "established", "since", "in business", "in operation",
-        "years in the industry", "recruitment agency", "years in placing",
-        "has been operating", "our company", "our agency", "we have over",
-        "with over", "has over", "combined", "our client", "leading",
-        "team has", "boasts",
+        "founded",
+        "established",
+        "since",
+        "in business",
+        "in operation",
+        "years in the industry",
+        "recruitment agency",
+        "years in placing",
+        "has been operating",
+        "our company",
+        "our agency",
+        "we have over",
+        "with over",
+        "has over",
+        "combined",
+        "our client",
+        "leading",
+        "team has",
+        "boasts",
     ]
+
     requirement_context = [
-        "minimum", "at least", "least", "required", "must have", "must",
-        "need", "requires",
+        "minimum",
+        "at least",
+        "least",
+        "required",
+        "must have",
+        "must",
+        "need",
+        "requires",
     ]
 
-    def is_self_description(start_index):
-        context = description[max(0, start_index - 60):start_index].lower()
-        return any(bad in context for bad in disqualifying_context)
-
-    def contains_disqualifying_language(text):
-        lowered = text.lower()
-        return any(bad in lowered for bad in disqualifying_context)
-
-    def is_implausible_without_requirement_wording(number, start_index):
-        # A double-digit-plus "years of experience" figure is very rarely
-        # an individual hire's requirement (that's usually a company's or
-        # team's aggregate track record) unless the text explicitly frames
-        # it as a requirement right next to the number.
-        if number <= 15:
-            return False
-        narrow_context = description[max(0, start_index - 25):start_index].lower()
-        return not any(req in narrow_context for req in requirement_context)
-
+    # Explicit numeric experience patterns.
+    #
+    # These require a number before/around "years", which prevents
+    # phrases such as "Experience with Google Analytics" from matching.
     patterns = [
-        r"(\d+)\+?\s*(?:to\s*\d+\s*)?years?(?:\s+of)?(?:\s+\w+){0,3}\s+experience",
-        r"experience\s+of\s+(?:at least\s+)?(\d+)\+?\s*years?",
+        # 3 years of experience
+        # 3+ years of experience
+        # 3 years experience
+        r"\b(\d+)\+?\s*(?:to\s*\d+\s*)?years?(?:\s+of)?\s+experience\b",
+
+        # experience of 3 years
+        # experience of at least 3 years
+        r"\bexperience\s+of\s+(?:at\s+least\s+)?(\d+)\+?\s*years?\b",
+
+        # minimum of 3 years experience
+        # at least 3 years experience
+        r"\b(?:minimum|at\s+least)\s+(?:of\s+)?(\d+)\+?\s*years?(?:\s+of)?\s+experience\b",
     ]
 
     for pattern in patterns:
         for match in re.finditer(pattern, description, re.IGNORECASE):
-            if is_self_description(match.start()):
-                continue
+
+            start_index = match.start()
             number = int(match.group(1))
-            if is_implausible_without_requirement_wording(number, match.start()):
+
+            # Inspect nearby text before the match.
+            context = description[
+                max(0, start_index - 100):start_index
+            ].lower()
+
+            # Ignore obvious employer/company history.
+            if any(bad in context for bad in disqualifying_context):
                 continue
+
+            # Very large values are usually company/team history rather
+            # than an individual candidate requirement unless requirement
+            # wording appears nearby.
+            if number > 15:
+                narrow_context = description[
+                    max(0, start_index - 40):start_index
+                ].lower()
+
+                if not any(
+                    req in narrow_context
+                    for req in requirement_context
+                ):
+                    continue
+
             return f"{number}+ years"
 
-    # Preserve the requirement sentence verbatim rather than guessing.
-    sentence_match = re.search(
-        r"([^.]*\d+[^.]*experience[^.]*\.)", description, re.IGNORECASE
-    )
-    if sentence_match:
-        candidate = sentence_match.group(1)
-        if not is_self_description(sentence_match.start()) and not contains_disqualifying_language(candidate):
-            return clean_text(candidate)
+    # IMPORTANT:
+    # Do NOT return arbitrary sentences containing the word "experience".
+    #
+    # For example:
+    # "Experience with analytics platforms such as Google Analytics..."
+    #
+    # contains "experience" but gives no number and therefore does not
+    # establish an experience-length requirement.
 
     return None
+
+
+   
 
 
 QUALIFICATION_PATTERNS = [
@@ -566,21 +662,36 @@ QUALIFICATION_PATTERNS = [
 
 def extract_qualification_from_description(description):
     """
-    Fallback when no structured "Min Qualification" field is present:
-    detect an explicitly stated minimum-qualification phrase in the job
-    description. This only recognizes qualifications the listing actually
-    states outright — it never infers a qualification from context.
+    Fallback when no structured "Min Qualification" field is present.
+
+    Detect explicit qualification requirements or explicit statements
+    that no degree is required.
+
+    This only recognizes qualifications the listing actually states.
+    It never infers a qualification from context.
     """
 
     if not description:
         return None
 
+    # Explicitly stated that a degree is NOT required.
+    no_degree_patterns = [
+        r"\bno degree required\b",
+        r"\bdegree not required\b",
+        r"\bno degree is required\b",
+        r"\bdegree is not required\b",
+    ]
+
+    for pattern in no_degree_patterns:
+        if re.search(pattern, description, re.IGNORECASE):
+            return "No degree required"
+
+    # Explicit minimum qualifications.
     for pattern, label in QUALIFICATION_PATTERNS:
         if re.search(pattern, description, re.IGNORECASE):
             return label
 
     return None
-
 
 JOB_TYPE_PILL_SLUGS = [
     "full-time",
@@ -718,18 +829,20 @@ def _stringify_jsonld_location(place):
 
 def extract_jsonld_jobposting(page):
     """
-    Extract whatever schema.org JobPosting fields are present in the
-    page's JSON-LD structured data.
+    Extract schema.org JobPosting data from BrighterMonday JSON-LD.
 
-    This is far more reliable than regex-matching visible text for fields
-    like posted/deadline dates, since those are frequently only present in
-    <script type="application/ld+json"> blocks rather than anywhere a user
-    can see. Not every listing template includes this data (or includes
-    every field within it) — any field left out here is left as None
-    rather than guessed at.
+    BrighterMonday commonly stores JobPosting, Organization, Place and
+    PostalAddress objects inside an @graph. This function resolves those
+    references so that fields such as company, location, posted date and
+    deadline can be extracted reliably.
 
-    Returns a dict with keys: posted, deadline, company, location,
-    job_type.
+    Returns:
+        dict with:
+            posted
+            deadline
+            company
+            location
+            job_type
     """
 
     result = {
@@ -741,11 +854,14 @@ def extract_jsonld_jobposting(page):
     }
 
     try:
-        scripts = page.locator('script[type="application/ld+json"]').all()
+        scripts = page.locator(
+            'script[type="application/ld+json"]'
+        ).all()
     except Exception:
         return result
 
     for script in scripts:
+
         try:
             raw = script.text_content()
         except Exception:
@@ -759,44 +875,208 @@ def extract_jsonld_jobposting(page):
         except Exception:
             continue
 
-        candidates = data if isinstance(data, list) else [data]
+        # ------------------------------------------------------------
+        # FLATTEN JSON-LD
+        # ------------------------------------------------------------
 
-        for item in candidates:
+        if isinstance(data, dict) and isinstance(
+            data.get("@graph"), list
+        ):
+            items = data["@graph"]
+        elif isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = [data]
+        else:
+            continue
+
+        # ------------------------------------------------------------
+        # INDEX ALL GRAPH OBJECTS BY @id
+        # ------------------------------------------------------------
+
+        by_id = {}
+
+        for item in items:
+
+            if not isinstance(item, dict):
+                continue
+
+            item_id = item.get("@id")
+
+            if item_id:
+                by_id[item_id] = item
+
+        # ------------------------------------------------------------
+        # FIND JOB POSTING
+        # ------------------------------------------------------------
+
+        job_posting = None
+
+        for item in items:
+
             if not isinstance(item, dict):
                 continue
 
             item_type = item.get("@type", "")
-            is_job_posting = (
+
+            if (
                 item_type == "JobPosting"
-                or (isinstance(item_type, list) and "JobPosting" in item_type)
+                or (
+                    isinstance(item_type, list)
+                    and "JobPosting" in item_type
+                )
+            ):
+                job_posting = item
+                break
+
+        if not job_posting:
+            continue
+
+        # ------------------------------------------------------------
+        # DATES
+        # ------------------------------------------------------------
+
+        result["posted"] = (
+            result["posted"]
+            or job_posting.get("datePosted")
+        )
+
+        result["deadline"] = (
+            result["deadline"]
+            or job_posting.get("validThrough")
+        )
+
+        # ------------------------------------------------------------
+        # JOB TYPE
+        # ------------------------------------------------------------
+
+        result["job_type"] = (
+            result["job_type"]
+            or job_posting.get("employmentType")
+        )
+
+        # ------------------------------------------------------------
+        # COMPANY
+        # ------------------------------------------------------------
+
+        hiring_org = job_posting.get(
+            "hiringOrganization"
+        )
+
+        company = None
+
+        if isinstance(hiring_org, dict):
+
+            # Direct organization object
+            company = hiring_org.get("name")
+
+            # Reference to another graph object
+            if not company:
+
+                org_id = hiring_org.get("@id")
+
+                if org_id and org_id in by_id:
+
+                    org_object = by_id[org_id]
+
+                    if isinstance(org_object, dict):
+                        company = org_object.get("name")
+
+        if company:
+            result["company"] = clean_text(
+                str(company)
             )
 
-            if not is_job_posting and "datePosted" not in item:
+        # ------------------------------------------------------------
+        # LOCATION
+        # ------------------------------------------------------------
+
+        job_location = job_posting.get(
+            "jobLocation"
+        )
+
+        locations = []
+
+        if isinstance(job_location, list):
+            locations = job_location
+
+        elif isinstance(job_location, dict):
+            locations = [job_location]
+
+        for location in locations:
+
+            if not isinstance(location, dict):
                 continue
 
-            result["posted"] = result["posted"] or item.get("datePosted")
-            result["deadline"] = result["deadline"] or item.get("validThrough")
-            result["job_type"] = result["job_type"] or item.get("employmentType")
+            # --------------------------------------------------------
+            # Resolve Place reference
+            # --------------------------------------------------------
 
-            hiring_org = item.get("hiringOrganization")
-            if isinstance(hiring_org, dict) and not result["company"]:
-                name = hiring_org.get("name")
-                if name:
-                    result["company"] = clean_text(name)
+            place = location
 
-            job_location = item.get("jobLocation")
-            if job_location and not result["location"]:
-                if isinstance(job_location, list):
-                    for loc in job_location:
-                        parsed = _stringify_jsonld_location(loc)
-                        if parsed:
-                            result["location"] = parsed
-                            break
-                else:
-                    result["location"] = _stringify_jsonld_location(job_location)
+            place_id = location.get("@id")
+
+            if place_id and place_id in by_id:
+
+                referenced_place = by_id[place_id]
+
+                if isinstance(referenced_place, dict):
+                    place = referenced_place
+
+            # --------------------------------------------------------
+            # Get address
+            # --------------------------------------------------------
+
+            address = place.get("address")
+
+            if isinstance(address, dict):
+
+                address_id = address.get("@id")
+
+                if address_id and address_id in by_id:
+
+                    referenced_address = by_id[
+                        address_id
+                    ]
+
+                    if isinstance(
+                        referenced_address,
+                        dict
+                    ):
+                        address = referenced_address
+
+            # Sometimes address is directly available
+            if not isinstance(address, dict):
+                continue
+
+            parts = [
+                address.get("streetAddress"),
+                address.get("addressLocality"),
+                address.get("addressRegion"),
+                address.get("addressCountry"),
+            ]
+
+            parts = [
+                clean_text(str(part))
+                for part in parts
+                if part and clean_text(str(part))
+            ]
+
+            if parts:
+
+                result["location"] = ", ".join(
+                    dict.fromkeys(parts)
+                )
+
+                break
+
+        # ------------------------------------------------------------
+        # We found the JobPosting, so stop searching JSON-LD scripts.
+        # ------------------------------------------------------------
+
+        break
 
     return result
-
 
 def extract_description(page):
     """
