@@ -74,10 +74,13 @@ from scripts.job_tracker import save_job
 # ============================================================
 
 try:
-    from scripts.cv_tailor import tailor_cv
+    from scripts.cv_tailor import (
+        tailor_cv,
+        create_application_directory,
+    )
 except ImportError:
     tailor_cv = None
-
+    create_application_directory = None
 
 try:
     from scripts.cover_letter import save_cover_letter
@@ -160,46 +163,6 @@ def get_job_description(job):
 # APPLICATION PREPARATION HELPERS
 # ============================================================
 
-def create_application_directory(job):
-    """
-    Create a safe directory for one job application.
-    """
-
-    company = clean_text(
-        job.get(
-            "company",
-            "unknown-company"
-        )
-    )
-
-    title = clean_text(
-        job.get(
-            "title",
-            "unknown-job"
-        )
-    )
-
-    directory_name = (
-        f"{company}-{title}"
-    )
-
-    directory_name = directory_name.lower()
-
-    directory_name = re.sub(
-        r"[^a-z0-9]+",
-        "-",
-        directory_name
-    )
-
-    directory_name = directory_name.strip("-")
-
-    if not directory_name:
-        directory_name = "application"
-
-    return (
-        APPLICATIONS_DIR
-        / directory_name
-    )
 
 
 def prepare_application_documents(
