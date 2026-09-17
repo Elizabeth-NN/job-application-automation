@@ -4,6 +4,12 @@ A Python-based job search and application-preparation system that collects softw
 
 The project uses browser automation with Playwright to collect and inspect jobs from **MyJobMag** and **BrighterMonday**, then processes each opportunity through a job-matching pipeline.
 
+## 🎥 Demo
+
+A quick walkthrough of the Job Application Assistant:
+
+![Job Application Assistant Demo](screenshots/job_assistant.gif)
+
 ## Features
 
 * Collects job listings from MyJobMag and BrighterMonday

@@ -1007,7 +1007,8 @@ def prepare_application(job):
         "application_directory": application_directory,
         "cv_path": cv_path,
         "cover_letter_path": cover_letter_path,
-    }
+        "application_url": job.get("application_url") or job.get("url"),
+        }
 
 
 # ============================================================
@@ -1473,9 +1474,8 @@ elif page == "Jobs":
                 unsafe_allow_html=True,
             )
 
-            # ------------------------------------------------
-            # Actions — real Streamlit widgets, styled to sit
-            # flush under the HTML block above.
+                    # ------------------------------------------------
+            # Actions — real Streamlit widgets
             # ------------------------------------------------
 
             can_prepare = (
@@ -1613,13 +1613,48 @@ elif page == "Jobs":
                         language="text",
                     )
 
+                    st.divider()
+
+                    # ------------------------------------------------
+                    # APPLY TO JOB
+                    # ------------------------------------------------
+
+                    application_url = (
+                        job.get(
+                            "application_url"
+                        )
+                        or last_application.get(
+                            "application_url"
+                        )
+                    )
+
+                    if application_url:
+
+                        st.link_button(
+                            "🔗 Apply to Job",
+                            application_url,
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                        st.caption(
+                            "Review your tailored CV and cover letter "
+                            "before applying."
+                        )
+
+                    else:
+
+                        st.warning(
+                            "No application URL was found for this job. "
+                            "Use the job listing above to apply."
+                        )
+
                     st.info(
                         "Review the generated CV and cover letter "
-                        "before marking the application as submitted."
+                        "before submitting your application."
                     )
 
             st.write("")  # small breathing room between cards
-
 
 # ============================================================
 # APPLICATIONS PAGE
