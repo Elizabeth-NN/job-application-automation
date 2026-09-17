@@ -1,61 +1,168 @@
-# 💼 Job Application Assistant
+# Job Application Assistant
 
-A Python-based job search and application management tool that helps streamline the process of finding relevant software development opportunities, evaluating job matches, and preparing tailored application documents.
+A Python-based job search and application-preparation system that collects software and technology job opportunities, analyzes them against a candidate profile, tracks applications, and generates tailored CVs and cover letters.
 
-The application collects job listings, evaluates them against a candidate's technical profile, tracks applications, and generates job-specific CVs and cover letters.
+The project uses browser automation with Playwright to collect and inspect jobs from **MyJobMag** and **BrighterMonday**, then processes each opportunity through a job-matching pipeline.
 
-A Streamlit web interface provides a graphical alternative to the command-line workflow.
+## Features
 
----
+* Collects job listings from MyJobMag and BrighterMonday
+* Uses Playwright for browser-based job inspection
+* Extracts job details, requirements, skills, experience, and application information
+* Filters BrighterMonday listings to identify technology-related roles
+* Matches jobs against a candidate profile
+* Calculates a compatibility score
+* Categorizes jobs as strong, weak, or poor matches
+* Recommends jobs for application or skipping
+* Detects external application links and application methods
+* Prevents duplicate jobs from being repeatedly added to the tracker
+* Generates tailored CVs for suitable positions
+* Generates customized cover letters
+* Stores job and application information in an Excel tracker
+* Provides a Streamlit interface for reviewing job opportunities and application data
+* Supports scheduled execution through Linux cron
+* Keeps automatic application submission disabled, allowing applications to be reviewed and submitted manually
 
-## 🚀 Features
+## Architecture
 
-### Job Collection
+```text
+                    Job Application Assistant
+                              |
+                 +------------+------------+
+                 |                         |
+                 v                         v
+          Job Collection             Streamlit UI
+                 |
+        +--------+--------+
+        |                 |
+        v                 v
+    MyJobMag        BrighterMonday
+        |                 |
+        +--------+--------+
+                 |
+                 v
+          Browser Inspection
+                 |
+                 v
+           Job Matching
+                 |
+                 v
+           Job Tracker
+                 |
+        +--------+--------+
+        |                 |
+        v                 v
+      SKIP              APPLY
+                          |
+                          v
+              Tailored CV + Cover Letter
+```
 
-The application can collect job listings from supported job boards and extract information such as:
+## Project Structure
+
+```text
+job-application-automation/
+│
+├── README.md
+├── app.py
+├── push.sh
+├── requirements.txt
+│
+├── applications/
+│   └── <company-job>/
+│       ├── tailored_cv.docx
+│       └── cover_letter.docx
+│
+├── config/
+│   └── __init__.py
+│
+├── data/
+│   ├── candidate_profile.json
+│   └── job_tracker.xlsx
+│
+└── scripts/
+    ├── __init__.py
+    ├── automation.py
+    ├── cover_letter.py
+    ├── cv_tailor.py
+    ├── job_matcher.py
+    ├── job_tracker.py
+    ├── review_jobs.py
+    ├── scheduler.py
+    │
+    └── browser/
+        ├── __init__.py
+        ├── browser.py
+        ├── brighter_monday.py
+        └── myjobmag.py
+```
+
+## Technologies
+
+* **Python**
+* **Playwright**
+* **Streamlit**
+* **pandas**
+* **openpyxl**
+* **python-docx**
+* **Flask/REST API experience reflected in candidate matching**
+* **Git/GitHub**
+* **Linux/WSL**
+* **cron**
+
+## Job Processing Pipeline
+
+Each collected job goes through the following process:
+
+### 1. Collection
+
+The system collects job listings from:
+
+* MyJobMag
+* BrighterMonday
+
+### 2. Browser Inspection
+
+Playwright opens individual job pages and extracts information such as:
 
 * Job title
 * Company
 * Location
-* Job description
+* Job type
+* Qualification
+* Experience
+* Responsibilities
 * Requirements
 * Skills
-* Experience requirements
-* Application deadline
-* Job URL
-* Posting information
+* Posting date
+* Deadline
+* Application method
+* Application URL
 
-### Job Matching
+### 3. Job Matching
 
-Each job is evaluated against the candidate profile using a matching engine.
+The extracted job information is compared with the candidate profile.
 
-The matching system considers factors such as:
+The matching system considers factors including:
 
-* Target role
+* Role relevance
 * Technical skills
-* Experience level
+* Experience
 * Location
 * Education
-* Technologies
+* Technology stack
 
-Jobs receive a match score and recommendation, such as:
+The result includes a compatibility score and recommendation.
 
-* `APPLY`
-* `REVIEW`
-* `SKIP`
+### 4. Tracking
 
-The system also identifies:
+Jobs are stored in:
 
-* Matching skills
-* Missing skills
-* Potential warnings
-* Role alignment
+```text
+data/job_tracker.xlsx
+```
 
-### Job Tracker
-
-Job information is stored in an Excel-based tracker.
-
-The tracker records:
+The tracker records information such as:
 
 * Date found
 * Job title
@@ -66,220 +173,176 @@ The tracker records:
 * Matching skills
 * Missing skills
 * Warnings
-* Posting date
+* Posting information
 * Deadline
 * Application URL
 * Application status
 * CV version
-* Cover letter status
+* Cover letter
 * Notes
 
-### Tailored CV Generation
+### 5. Application Preparation
 
-The CV tailoring engine creates a job-specific CV from the candidate profile.
-
-It can:
-
-* Identify relevant technical skills
-* Select relevant professional experience
-* Rank relevant projects
-* Generate a tailored professional summary
-* Create a formatted `.docx` CV
-
-The goal is to emphasize information that is relevant to each individual job rather than using exactly the same CV for every application.
-
-### Cover Letter Generation
-
-The application can generate a job-specific cover letter using:
-
-* Target job title
-* Company
-* Matching technical skills
-* Relevant experience
-* Relevant projects
-
-Cover letters are generated as Word documents.
-
-### Application Management
-
-The application manager brings the process together by allowing the user to:
-
-1. Review matched jobs
-2. Select a job
-3. Prepare application documents
-4. Review the generated CV and cover letter
-5. Record the application
-6. Track application status
-
-### Streamlit Web Interface
-
-The project also includes a Streamlit interface that provides a graphical dashboard.
-
-The web application provides:
-
-* Dashboard
-* Job listings
-* Job filtering
-* Job search
-* Match scores
-* Job recommendations
-* Job details
-* Application preparation
-* Tailored CV generation
-* Cover letter generation
-* Application tracking
-
----
-
-## 🏗️ How It Works
-
-The application follows a pipeline:
+For suitable opportunities, the system creates an application directory containing:
 
 ```text
-Job Sources
-     │
-     ▼
-Job Collector
-     │
-     ▼
-Job Details
-     │
-     ▼
-Job Matcher
-     │
-     ▼
-Match Score & Recommendation
-     │
-     ▼
-Excel Job Tracker
-     │
-     ▼
-Application Manager
-     │
-     ├───────────────┐
-     ▼               ▼
-Tailored CV      Cover Letter
-     │               │
-     └───────┬───────┘
-             ▼
-      Application Review
-             │
-             ▼
-      Application Tracker
+tailored_cv.docx
+cover_letter.docx
 ```
 
-The Streamlit application provides a graphical interface over this workflow.
-
----
-
-## 📁 Project Structure
+For example:
 
 ```text
-job-application-automation/
-│
-├── app.py
-│
-├── main.py
-│
-├── requirements.txt
-│
-├── README.md
-│
-├── config/
-│   ├── __init__.py
-│   └── profile.py
-│
-├── data/
-│   ├── candidate_profile.json
-│   └── job_tracker.xlsx
-│
-├── applications/
-│   └── ...
-│
-└── scripts/
-    ├── __init__.py
-    ├── application_manager.py
-    ├── cover_letter.py
-    ├── cv_tailor.py
-    ├── job_collector.py
-    ├── job_matcher.py
-    ├── job_tracker.py
-    ├── run_job_search.py
-    │
-    └── sources/
-        ├── __init__.py
-        ├── myjobmag.py
-        └── brighter_monday.py
+applications/
+└── simplepay-backend-developer/
+    ├── tailored_cv.docx
+    └── cover_letter.docx
 ```
 
-### Main Components
+## Streamlit Interface
 
-| File                     | Purpose                                                         |
-| ------------------------ | --------------------------------------------------------------- |
-| `app.py`                 | Streamlit web interface                                         |
-| `main.py`                | Main application entry point                                    |
-| `candidate_profile.json` | Candidate information used for matching and document generation |
-| `job_collector.py`       | Coordinates job collection                                      |
-| `job_matcher.py`         | Calculates job compatibility                                    |
-| `job_tracker.py`         | Creates and updates the Excel job tracker                       |
-| `application_manager.py` | Command-line application workflow                               |
-| `cv_tailor.py`           | Generates tailored CVs                                          |
-| `cover_letter.py`        | Generates tailored cover letters                                |
-| `run_job_search.py`      | Runs the job collection and matching process                    |
-| `myjobmag.py`            | MyJobMag job source                                             |
-| `brighter_monday.py`     | BrighterMonday job source                                       |
+The project includes a Streamlit interface through:
 
----
-
-## 🛠️ Technologies Used
-
-### Programming Language
-
-* Python
-
-### Web Interface
-
-* Streamlit
-
-### Document Generation
-
-* `python-docx`
-
-### Data Storage
-
-* Excel
-* `openpyxl`
-* JSON
-
-### Web Scraping / Job Collection
-
-* `requests`
-* `BeautifulSoup`
-
-### Development Tools
-
-* Git
-* GitHub
-* WSL / Ubuntu
-* Python virtual environments
-
----
-
-## ⚙️ Installation
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/YOUR-USERNAME/job-application-automation.git
+```text
+app.py
 ```
 
-Move into the project:
+Run it with:
 
 ```bash
+streamlit run app.py
+```
+
+The interface provides a user-friendly way to review the jobs and application information produced by the automation pipeline.
+
+The Streamlit interface and the browser automation are intentionally separated.
+
+```text
+Automation
+    ↓
+job_tracker.xlsx
+    ↓
+Streamlit
+    ↓
+Review jobs and applications
+```
+
+This allows the automation to be run independently without requiring the Streamlit application to remain open.
+
+## Running the Automation
+
+Activate the virtual environment:
+
+```bash
+source venv/bin/activate
+```
+
+Run the complete automation pipeline:
+
+```bash
+python -m scripts.automation
+```
+
+The pipeline will:
+
+```text
+Collect jobs
+    ↓
+Inspect jobs
+    ↓
+Match jobs
+    ↓
+Update tracker
+    ↓
+Prepare applications for suitable jobs
+```
+
+Automatic application submission is currently disabled. The system prepares the relevant documents and application information for manual review and submission.
+
+## Scheduling
+
+The project supports Linux cron for scheduled job searches.
+
+A cron job can execute the automation every six hours:
+
+```text
+00:00
+06:00
+12:00
+18:00
+```
+
+The automation output can be redirected to:
+
+```text
+logs/automation.log
+```
+
+However, scheduled execution is optional. The automation can also be run manually whenever required.
+
+## Browser Layers
+
+Browser-specific functionality is separated into individual modules.
+
+### MyJobMag
+
+```text
+scripts/browser/myjobmag.py
+```
+
+Responsible for:
+
+* Collecting job links
+* Inspecting job pages
+* Extracting structured information
+* Detecting application methods
+
+### BrighterMonday
+
+```text
+scripts/browser/brighter_monday.py
+```
+
+Responsible for:
+
+* Searching the Software & Data category
+* Paginating through listings
+* Filtering technology-related jobs
+* Inspecting individual job pages
+* Extracting job and application information
+
+### Shared Browser
+
+```text
+scripts/browser/browser.py
+```
+
+Provides shared browser startup and shutdown functionality.
+
+The browser modules do **not** automatically submit applications.
+
+## Configuration
+
+Candidate information used by the matching and document-generation system is stored in:
+
+```text
+data/candidate_profile.json
+```
+
+This keeps candidate-specific information separate from the application logic.
+
+Sensitive personal information should not be committed to a public repository.
+
+## Installation
+
+Clone the repository and enter the project directory:
+
+```bash
+git clone <repository-url>
 cd job-application-automation
 ```
 
-### 2. Create a virtual environment
+Create a virtual environment:
 
 ```bash
 python3 -m venv venv
@@ -291,250 +354,91 @@ Activate it:
 source venv/bin/activate
 ```
 
-### 3. Install dependencies
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
----
+Install the Playwright browser:
 
-## ▶️ Running the Application
+```bash
+playwright install chromium
+```
 
-### Streamlit Interface
+## Usage
 
-Start the web application with:
+### Run job automation
+
+```bash
+python -m scripts.automation
+```
+
+### Launch the Streamlit interface
 
 ```bash
 streamlit run app.py
 ```
 
-Streamlit will provide a local URL that can be opened in a web browser.
-
-Typically:
-
-```text
-http://localhost:8501
-```
-
-### Command-Line Job Search
-
-The job search pipeline can be run with:
+### Run the Python scheduler manually
 
 ```bash
-python -m scripts.run_job_search
+python -m scripts.scheduler
 ```
 
-### Command-Line Application Manager
+The Python scheduler is available as an alternative scheduling mechanism. For regular Linux scheduling, cron can execute `scripts.automation` directly.
 
-The original command-line application workflow can be started with:
+## Current Scope
 
-```bash
-python -m scripts.application_manager
-```
+The system currently focuses on:
 
-### Testing the CV Tailoring Engine
+* Job discovery
+* Job analysis
+* Candidate-job matching
+* Application tracking
+* CV customization
+* Cover-letter generation
+* Application preparation
 
-```bash
-python -m scripts.cv_tailor
-```
+Automatic submission of job applications is intentionally **not implemented**.
 
-### Testing the Cover Letter Generator
+This allows the candidate to review each opportunity before submitting an application, particularly when external application systems require different workflows.
 
-```bash
-python -m scripts.cover_letter
-```
+## Future Improvements
 
----
+Potential future enhancements include:
 
-## 📊 Job Matching
+* Additional job sources
+* More advanced job-ranking and matching
+* Email notifications for new matches
+* Improved Streamlit analytics
+* Application status management
+* Automated application workflows for supported platforms
+* Cloud/server-based scheduled execution
+* More detailed execution logs
+* Database-backed job tracking instead of Excel
+* Authentication and user accounts for the Streamlit interface
 
-The matching system evaluates jobs using multiple factors rather than relying only on keyword matching.
+## Project Goal
 
-The current matching approach considers:
+The goal of the project is to reduce the repetitive work involved in searching for software development opportunities and preparing applications while keeping the candidate in control of the final application decision.
+
+The system automates the repetitive parts of the workflow:
 
 ```text
-Role Match
-    +
-Technical Skills
-    +
-Experience
-    +
-Location
-    +
-Education
-    +
-Technology
-    =
-Overall Match Score
+Discover
+   ↓
+Inspect
+   ↓
+Match
+   ↓
+Track
+   ↓
+Prepare
+   ↓
+Review
+   ↓
+Apply
 ```
 
-The result helps prioritize jobs that are more closely aligned with the candidate's background.
-
----
-
-## 📄 Application Documents
-
-When an application is prepared, the system creates a dedicated application directory.
-
-For example:
-
-```text
-applications/
-└── company-job-title/
-    ├── tailored_cv.docx
-    └── cover_letter.docx
-```
-
-This keeps documents for different applications separate and makes it easier to review applications individually.
-
----
-
-## 🔐 Personal Information & Security
-
-The application uses a candidate profile to generate personalized CVs and cover letters.
-
-The repository should **not contain sensitive personal information, credentials, API keys, passwords, or private configuration values**.
-
-Before publishing the repository publicly:
-
-* Remove personal data that should not be public
-* Do not commit passwords or API keys
-* Do not commit authentication credentials
-* Add sensitive files to `.gitignore`
-* Use environment variables for secrets
-* Review files before pushing them to GitHub
-
-Example:
-
-```text
-.env
-*.key
-*.pem
-credentials.json
-```
-
-Personal application documents should also be kept out of the public repository unless they are intentionally meant to be public.
-
----
-
-## 🌐 Deployment
-
-The Streamlit interface can be deployed to a cloud hosting service that supports Streamlit applications.
-
-For Streamlit Community Cloud, the application needs to be stored in a GitHub repository.
-
-The deployment entry point is:
-
-```text
-app.py
-```
-
-The repository should also contain:
-
-```text
-requirements.txt
-```
-
-so that the deployment environment can install the required Python packages.
-
-> **Important:** A public repository should not contain private candidate information or generated application documents.
-
----
-
-## 🔄 Current Workflow
-
-The current workflow is:
-
-```text
-1. Collect jobs
-        ↓
-2. Extract job information
-        ↓
-3. Match jobs against candidate profile
-        ↓
-4. Store jobs in Excel tracker
-        ↓
-5. Review jobs
-        ↓
-6. Select a job
-        ↓
-7. Generate tailored CV
-        ↓
-8. Generate cover letter
-        ↓
-9. Review documents
-        ↓
-10. Apply manually
-        ↓
-11. Record application
-```
-
-The application is intentionally designed so that the user reviews the job and generated documents before submitting an application.
-
----
-
-## 🧪 Development Status
-
-This project is currently under active development.
-
-### Completed
-
-* [x] Job collection
-* [x] Job matching
-* [x] Match scoring
-* [x] Excel job tracker
-* [x] Application tracking
-* [x] CV tailoring
-* [x] Cover letter generation
-* [x] Command-line application manager
-* [x] Streamlit web interface
-* [x] Job filtering
-* [x] Application preparation through the web interface
-
-### Planned
-
-* [ ] Automated job searching
-* [ ] More job-board sources
-* [ ] Improved job matching
-* [ ] Better CV tailoring
-* [ ] Improved cover-letter personalization
-* [ ] Automated application workflows
-* [ ] Application status management
-* [ ] Email/application notifications
-* [ ] Improved dashboard analytics
-
----
-
-## 🎯 Project Goal
-
-The goal of this project is to reduce the repetitive work involved in a modern job search while keeping the candidate in control of the final application.
-
-Instead of manually searching for jobs, comparing every job against a CV, preparing documents, and maintaining a separate application tracker, the system brings these tasks together into one workflow.
-
-The long-term objective is to develop a personal job-search assistant capable of:
-
-* Finding relevant opportunities
-* Evaluating job compatibility
-* Prioritizing applications
-* Tailoring application documents
-* Tracking application progress
-* Reducing repetitive application tasks
-
----
-
-## ⚠️ Disclaimer
-
-This project is intended as a personal job-search productivity tool.
-
-Job listings, requirements, deadlines, and application processes may change. Generated CVs and cover letters should always be reviewed before submission.
-
-The application does not guarantee employment or application success.
-
----
-
-## 👩‍💻 Author
-
-Developed as a personal software engineering project.
-
-Built with Python, Streamlit, and related open-source technologies.
+It is designed as a practical automation project combining **Python, web automation, data processing, document generation, and a Streamlit interface**.
